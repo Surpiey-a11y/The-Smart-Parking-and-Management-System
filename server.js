@@ -1,4 +1,4 @@
-// Smart Parking Backend - Neon Postgres
+// Smart Parking Backend - Neon Postgres + ESP32 hardware integration
 require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
@@ -10,6 +10,7 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret-in-production';
+const HARDWARE_API_KEY = process.env.HARDWARE_API_KEY || 'change-this-hardware-key';
 
 app.use(cors());
 app.use(express.json());
@@ -45,7 +46,10 @@ function auth(req, res, next) {
   }
 }
 
-// Register
+// -----------------------------------------------------------
+// Auth
+// -----------------------------------------------------------
+
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, password } = req.body;
@@ -71,7 +75,6 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-// Login
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -91,7 +94,6 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
-// Current user
 app.get('/api/auth/me', auth, async (req, res) => {
   const result = await pool.query(
     'SELECT id, name, email FROM users WHERE id = $1',
@@ -101,29 +103,53 @@ app.get('/api/auth/me', auth, async (req, res) => {
 });
 
 // -----------------------------------------------------------
-// Slot configuration — 2 VIP + 1 public (school project scale)
+// Slot configuration — 1 VIP + 2 public
 // -----------------------------------------------------------
 const SLOTS = [
   { id: 'V1', type: 'vip' },
-  { id: 'V2', type: 'vip' },
-  { id: 'P1', type: 'public' }
+  { id: 'P1', type: 'public' },
+  { id: 'P2', type: 'public' }
 ];
 
-// Get slots + availability summary
+// ESP32 physical sensor → website slot
+// Sensor 1 = V1 (VIP), Sensor 2 = P1 (public), Sensor 3 = P2 (public)
+const SENSOR_TO_SLOT = {
+  1: 'V1',
+  2: 'P1',
+  3: 'P2'
+};
+
+// -----------------------------------------------------------
+// Slots — merges reservations + physical sensors
+// -----------------------------------------------------------
 app.get('/api/slots', async (req, res) => {
   try {
     const date = req.query.date || new Date().toISOString().split('T')[0];
 
-    const result = await pool.query(
+    // Reserved bookings for the day
+    const reservedResult = await pool.query(
       'SELECT slot_id FROM reservations WHERE date = $1 AND status = $2',
       [date, 'active']
     );
-    const occupied = result.rows.map(r => r.slot_id);
+    const reserved = reservedResult.rows.map(r => r.slot_id);
 
-    const slots = SLOTS.map(s => ({
-      ...s,
-      status: occupied.includes(s.id) ? 'occupied' : 'available'
-    }));
+    // Physical sensor state
+    const sensorResult = await pool.query('SELECT slot_id, occupied FROM slot_sensors');
+    const sensorMap = {};
+    sensorResult.rows.forEach(r => { sensorMap[r.slot_id] = r.occupied; });
+
+    const slots = SLOTS.map(s => {
+      const isReserved = reserved.includes(s.id);
+      const isPhysicallyOccupied = sensorMap[s.id] === true;
+      const occupied = isReserved || isPhysicallyOccupied;
+
+      return {
+        ...s,
+        status: occupied ? 'occupied' : 'available',
+        reserved: isReserved,
+        physicallyOccupied: isPhysicallyOccupied
+      };
+    });
 
     const summary = {
       vip: {
@@ -143,19 +169,67 @@ app.get('/api/slots', async (req, res) => {
   }
 });
 
-// Create reservation
+// -----------------------------------------------------------
+// Hardware endpoint — ESP32 posts sensor updates here
+// -----------------------------------------------------------
+app.post('/api/hardware/slot-update', async (req, res) => {
+  try {
+    const key = req.headers['x-api-key'];
+    if (key !== HARDWARE_API_KEY) {
+      return res.status(401).json({ error: 'Invalid API key' });
+    }
+
+    const { sensorId, occupied } = req.body;
+    if (sensorId === undefined || typeof occupied !== 'boolean') {
+      return res.status(400).json({ error: 'sensorId and occupied required' });
+    }
+
+    const slotId = SENSOR_TO_SLOT[sensorId];
+    if (!slotId) {
+      return res.status(400).json({ error: 'Unknown sensorId' });
+    }
+
+    await pool.query(
+      `INSERT INTO slot_sensors (slot_id, occupied, updated_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (slot_id) DO UPDATE
+         SET occupied = EXCLUDED.occupied, updated_at = NOW()`,
+      [slotId, occupied]
+    );
+
+    console.log(`[HW] Sensor ${sensorId} → ${slotId} = ${occupied ? 'OCCUPIED' : 'FREE'}`);
+    res.json({ ok: true, slotId, occupied });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -----------------------------------------------------------
+// Reservations
+// -----------------------------------------------------------
 app.post('/api/reservations', auth, async (req, res) => {
   try {
     const { slotId, date, time, duration } = req.body;
     if (!slotId || !date || !time)
       return res.status(400).json({ error: 'Missing booking details' });
 
+    // Block if already reserved
     const conflict = await pool.query(
       'SELECT id FROM reservations WHERE slot_id = $1 AND date = $2 AND status = $3',
       [slotId, date, 'active']
     );
     if (conflict.rows.length > 0)
       return res.status(400).json({ error: 'Slot already booked for this date' });
+
+    // Block if physically occupied right now
+    const sensor = await pool.query(
+      'SELECT occupied FROM slot_sensors WHERE slot_id = $1',
+      [slotId]
+    );
+    if (sensor.rows.length > 0 && sensor.rows[0].occupied) {
+      return res.status(400).json({ error: 'That slot is currently occupied' });
+    }
 
     const result = await pool.query(
       'INSERT INTO reservations (user_id, slot_id, date, time, duration) VALUES ($1, $2, $3, $4, $5) RETURNING *',
@@ -169,7 +243,6 @@ app.post('/api/reservations', auth, async (req, res) => {
   }
 });
 
-// My reservations
 app.get('/api/reservations/my', auth, async (req, res) => {
   const result = await pool.query(
     'SELECT * FROM reservations WHERE user_id = $1 AND status = $2 ORDER BY created_at DESC',
@@ -178,7 +251,6 @@ app.get('/api/reservations/my', auth, async (req, res) => {
   res.json(result.rows);
 });
 
-// Cancel reservation
 app.delete('/api/reservations/:id', auth, async (req, res) => {
   const result = await pool.query(
     'UPDATE reservations SET status = $1 WHERE id = $2 AND user_id = $3 RETURNING *',
@@ -189,7 +261,7 @@ app.delete('/api/reservations/:id', auth, async (req, res) => {
   res.json({ success: true });
 });
 
-// Serve index.html for any unknown route
+// Serve index.html for unknown routes
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
