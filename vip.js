@@ -1,166 +1,161 @@
 /* =========================================================
-   SmartPark — VIP booking page
-   - Loads VIP slots from /api/slots
-   - Lets the user pick one
-   - POSTs the booking to /api/reservations
+   SmartPark — VIP page logic
+   Fetches live slot availability from /api/slots and
+   handles slot selection + reservation confirmation.
    ========================================================= */
 
-const SLOTS_API = '/api/slots';
-const BOOK_API  = '/api/reservations';
+const API_BASE = '';
+const TOKEN = localStorage.getItem('smartpark_token');
 
-const vipContainer  = document.getElementById('vip-slots-container');
-const confirmBtn    = document.getElementById('confirm-vip-btn');
-const selectedLabel = document.getElementById('selected-slot-label');
+// Redirect to login if not authenticated
+if (!TOKEN) {
+  window.location.href = 'login.html';
+}
+
+const userRaw = localStorage.getItem('smartpark_user');
+if (userRaw) {
+  try {
+    const u = JSON.parse(userRaw);
+    const el = document.getElementById('user-display-name');
+    if (el) el.textContent = u.name || 'User';
+  } catch {}
+}
 
 let selectedSlotId = null;
-let vipSlots       = [];
+let allSlots = [];
 
-/* -------------------- helpers -------------------- */
+const container = document.getElementById('vip-slots-container');
+const label = document.getElementById('selected-slot-label');
+const confirmBtn = document.getElementById('confirm-vip-btn');
+
 function showToast(msg, success = true) {
   const toast = document.getElementById('toast');
-  if (!toast) return;
   const toastText = document.getElementById('toast-text');
+  if (!toast || !toastText) return;
   toastText.textContent = msg;
-
   const icon = toast.querySelector('i');
   if (icon) {
-    icon.className = success ? 'fas fa-check-circle' : 'fas fa-exclamation-circle';
+    icon.className = success
+      ? 'fas fa-check-circle'
+      : 'fas fa-exclamation-circle';
     icon.style.color = success ? '#22c55e' : '#f97316';
   }
   toast.classList.add('show');
   setTimeout(() => toast.classList.remove('show'), 2800);
 }
 
-function setUserDisplay() {
-  const nameEl = document.getElementById('user-display-name');
-  if (!nameEl) return;
-  const user = JSON.parse(localStorage.getItem('smartpark_user') || 'null');
-  nameEl.textContent = (user && user.name) ? user.name : 'User';
-}
+function renderSlots(slots, summary) {
+  container.innerHTML = '';
 
-/* -------------------- render -------------------- */
-function renderVipSlots() {
-  if (!vipContainer) return;
-  vipContainer.innerHTML = '';
+  // Header line: "2 of 2 VIP spaces available"
+  const header = document.createElement('div');
+  header.style.marginBottom = '12px';
+  header.style.fontSize = '14px';
+  header.style.opacity = '0.85';
+  header.innerHTML = `<strong>${summary.vip.available}</strong> of <strong>${summary.vip.total}</strong> VIP spaces available today`;
+  container.appendChild(header);
+
+  const vipSlots = slots.filter(s => s.type === 'vip');
 
   if (vipSlots.length === 0) {
-    vipContainer.innerHTML = '<p style="color:#94a3b8;">No VIP slots available.</p>';
+    container.innerHTML += '<p>No VIP slots configured.</p>';
     return;
   }
 
+  const grid = document.createElement('div');
+  grid.style.display = 'grid';
+  grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(120px, 1fr))';
+  grid.style.gap = '12px';
+
   vipSlots.forEach(slot => {
-    const statusClass = slot.occupied ? 'occupied' : 'available';
-    const cardClass = `slot-card vip-slot ${statusClass}`;
-
-    const card = document.createElement('div');
-    card.className = cardClass;
+    const card = document.createElement('button');
+    card.type = 'button';
     card.dataset.slotId = slot.id;
-    card.dataset.occupied = slot.occupied;
-
+    card.className = 'slot-card ' + slot.status;
+    card.style.padding = '16px';
+    card.style.borderRadius = '10px';
+    card.style.cursor = slot.status === 'available' ? 'pointer' : 'not-allowed';
+    card.style.border = '1px solid rgba(255,255,255,0.1)';
+    card.style.background = slot.status === 'available'
+      ? 'rgba(255,255,255,0.05)'
+      : 'rgba(120,120,120,0.15)';
+    card.style.color = 'inherit';
+    card.style.opacity = slot.status === 'available' ? '1' : '0.5';
     card.innerHTML = `
-      <i class="fas fa-crown slot-icon"></i>
-      <div class="slot-id">${slot.id}</div>
-      <div class="slot-type-badge">VIP</div>
-      <div class="slot-status">${slot.occupied ? 'Occupied' : 'Available'}</div>
+      <div style="font-size:20px;"><i class="fas fa-crown"></i></div>
+      <div style="font-weight:600;margin-top:6px;">${slot.id}</div>
+      <div style="font-size:12px;margin-top:4px;">${slot.status === 'available' ? 'Available' : 'Occupied'}</div>
     `;
 
-    if (selectedSlotId === slot.id) {
-      card.classList.add('selected');
+    if (slot.status === 'available') {
+      card.addEventListener('click', () => selectSlot(slot.id));
     }
 
-    card.addEventListener('click', () => {
-      if (slot.occupied) {
-        showToast('That VIP slot is occupied.', false);
-        return;
-      }
+    grid.appendChild(card);
+  });
 
-      // toggle selection
-      selectedSlotId = (selectedSlotId === slot.id) ? null : slot.id;
+  container.appendChild(grid);
+}
 
-      selectedLabel.textContent = selectedSlotId
-        ? `Selected: ${selectedSlotId} — 2-hour booking`
-        : 'No slot selected yet.';
+function selectSlot(id) {
+  selectedSlotId = id;
+  label.textContent = `Selected: ${id}`;
+  confirmBtn.disabled = false;
 
-      confirmBtn.disabled = !selectedSlotId;
-      renderVipSlots();
-    });
-
-    vipContainer.appendChild(card);
+  document.querySelectorAll('.slot-card').forEach(c => {
+    c.style.outline = c.dataset.slotId === id ? '2px solid #a855f7' : 'none';
   });
 }
 
-/* -------------------- load slots -------------------- */
-async function loadVipSlots() {
+async function loadSlots() {
   try {
-    const res = await fetch(SLOTS_API, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const res = await fetch(`${API_BASE}/api/slots`);
+    if (!res.ok) throw new Error('Failed to load slots');
     const data = await res.json();
-
-    if (!Array.isArray(data)) throw new Error('Bad data');
-
-    vipSlots = data.filter(s => s.type === 'vip');
-    renderVipSlots();
+    allSlots = data.slots;
+    renderSlots(data.slots, data.summary);
   } catch (err) {
-    console.warn('Could not load VIP slots:', err.message);
-    // fallback so the page still renders something
-    vipSlots = [{ id: 'V1', type: 'vip', occupied: false }];
-    renderVipSlots();
+    container.innerHTML = `<p style="color:#f97316;">Could not load slots: ${err.message}</p>`;
   }
 }
 
-/* -------------------- book -------------------- */
-async function bookVipSlot() {
+confirmBtn?.addEventListener('click', async () => {
   if (!selectedSlotId) return;
 
-  const token = localStorage.getItem('smartpark_token');
-  if (!token) {
-    showToast('You must be logged in.', false);
-    setTimeout(() => { window.location.href = 'login.html'; }, 900);
-    return;
-  }
+  confirmBtn.disabled = true;
+  const original = confirmBtn.innerHTML;
+  confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Booking…';
 
   const today = new Date().toISOString().split('T')[0];
-  const now = new Date();
-  const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const time = new Date().toTimeString().slice(0, 5); // HH:MM
 
   try {
-    confirmBtn.disabled = true;
-    confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Booking…';
-
-    const res = await fetch(BOOK_API, {
+    const res = await fetch(`${API_BASE}/api/reservations`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`
+        Authorization: `Bearer ${TOKEN}`
       },
       body: JSON.stringify({
         slotId: selectedSlotId,
         date: today,
-        time: time,
+        time,
         duration: 2
       })
     });
-
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Booking failed');
 
-    showToast(`VIP slot ${selectedSlotId} booked!`, true);
-    confirmBtn.innerHTML = '<i class="fas fa-check"></i> Booked!';
-
-    // go back to public page after a moment
-    setTimeout(() => { window.location.href = 'public.html'; }, 1500);
+    showToast(`VIP slot ${selectedSlotId} booked!`);
+    selectedSlotId = null;
+    label.textContent = 'No slot selected yet.';
+    await loadSlots();
   } catch (err) {
     showToast(err.message, false);
-    confirmBtn.disabled = false;
-    confirmBtn.innerHTML = '<i class="fas fa-check"></i> Confirm VIP booking';
+  } finally {
+    confirmBtn.innerHTML = original;
+    confirmBtn.disabled = !selectedSlotId;
   }
-}
+});
 
-/* -------------------- boot -------------------- */
-if (!localStorage.getItem('smartpark_token')) {
-  window.location.href = 'login.html';
-} else {
-  setUserDisplay();
-  loadVipSlots();
-  confirmBtn.addEventListener('click', bookVipSlot);
-}
+loadSlots();

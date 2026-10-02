@@ -100,11 +100,19 @@ app.get('/api/auth/me', auth, async (req, res) => {
   res.json(result.rows[0]);
 });
 
-// Get slots
+// -----------------------------------------------------------
+// Slot configuration — 2 VIP + 1 public (school project scale)
+// -----------------------------------------------------------
+const SLOTS = [
+  { id: 'V1', type: 'vip' },
+  { id: 'V2', type: 'vip' },
+  { id: 'P1', type: 'public' }
+];
+
+// Get slots + availability summary
 app.get('/api/slots', async (req, res) => {
   try {
     const date = req.query.date || new Date().toISOString().split('T')[0];
-    const SLOT_IDS = ['A1','A2','A3','A4','B1','B2','B3','B4','C1','C2','C3','C4'];
 
     const result = await pool.query(
       'SELECT slot_id FROM reservations WHERE date = $1 AND status = $2',
@@ -112,12 +120,23 @@ app.get('/api/slots', async (req, res) => {
     );
     const occupied = result.rows.map(r => r.slot_id);
 
-    const slots = SLOT_IDS.map(id => ({
-      id,
-      status: occupied.includes(id) ? 'occupied' : 'available'
+    const slots = SLOTS.map(s => ({
+      ...s,
+      status: occupied.includes(s.id) ? 'occupied' : 'available'
     }));
 
-    res.json(slots);
+    const summary = {
+      vip: {
+        total: slots.filter(s => s.type === 'vip').length,
+        available: slots.filter(s => s.type === 'vip' && s.status === 'available').length
+      },
+      public: {
+        total: slots.filter(s => s.type === 'public').length,
+        available: slots.filter(s => s.type === 'public' && s.status === 'available').length
+      }
+    };
+
+    res.json({ slots, summary });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message });
