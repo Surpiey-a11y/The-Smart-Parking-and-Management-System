@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Available Slots — SmartPark</title>
+  <link rel="stylesheet" href="public.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body>
+  <div class="app-container">
+    <div id="page-parking" class="page active">
+      <div class="parking-header">
+        <h1><i class="fas fa-parking"></i> Available slots</h1>
+        <div class="header-actions">
+          <div class="user-badge">
+            <i class="fas fa-user-circle"></i>
+            <span id="user-display-name">User</span>
+          </div>
+          <a href="login.html" class="logout-btn" id="logout-btn">
+            <i class="fas fa-sign-out-alt"></i> Logout
+          </a>
+        </div>
+      </div>
+
+      <div class="live-status" id="live-status">
+        <i class="fas fa-circle"></i>
+        <span id="live-status-text">Connecting…</span>
+      </div>
+
+      <div class="slots-grid" id="slots-container">
+        <!-- Slots injected by public.js -->
+      </div>
+
+      <div class="reserve-section vip-cta">
+        <div class="reserve-info">
+          <i class="fas fa-crown"></i>
+          <div>
+            <h3>Want a premium spot?</h3>
+            <p>Reserve a VIP slot for 2 hours.</p>
+          </div>
+        </div>
+        <a href="vip.html" class="btn btn-vip" id="vip-cta-btn">
+          <i class="fas fa-crown"></i> Reserve VIP slot
+        </a>
+      </div>
+    </div>
+
+    <div id="toast" class="toast">
+      <i class="fas fa-check-circle" style="margin-right: 10px;"></i>
+      <span id="toast-text"></span>
+    </div>
+  </div>
+
+  <script src="public.js"></script>
+</body>
+</html>

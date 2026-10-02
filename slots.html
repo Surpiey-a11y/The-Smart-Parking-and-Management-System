@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VIP Reservation — SmartPark</title>
+  <link rel="stylesheet" href="public.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+</head>
+<body>
+  <div class="app-container">
+    <div id="page-vip" class="page active vip-page">
+      <div class="parking-header">
+        <h1><i class="fas fa-crown"></i> VIP Reservation</h1>
+        <div class="header-actions">
+          <div class="user-badge">
+            <i class="fas fa-user-circle"></i>
+            <span id="user-display-name">User</span>
+          </div>
+          <a href="public.html" class="logout-btn">
+            <i class="fas fa-arrow-left"></i> Back
+          </a>
+        </div>
+      </div>
+
+      <div class="subhead">Pick an available VIP slot and confirm your 2-hour booking.</div>
+
+      <div class="slots-grid" id="vip-slots-container">
+        <!-- Injected by vip.js -->
+      </div>
+
+      <div class="reserve-section">
+        <div class="reserve-info">
+          <i class="fas fa-car"></i>
+          <div>
+            <h3>Confirm reservation</h3>
+            <p id="selected-slot-label">No slot selected yet.</p>
+          </div>
+        </div>
+        <button class="btn btn-vip" id="confirm-vip-btn" type="button" disabled>
+          <i class="fas fa-check"></i> Confirm VIP booking
+        </button>
+      </div>
+    </div>
+
+    <div id="toast" class="toast">
+      <i class="fas fa-check-circle" style="margin-right: 10px;"></i>
+      <span id="toast-text"></span>
+    </div>
+  </div>
+
+  <script src="vip.js"></script>
+</body>
+</html>
