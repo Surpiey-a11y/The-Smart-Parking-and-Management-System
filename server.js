@@ -112,7 +112,7 @@ const SLOTS = [
 ];
 
 // ESP32 physical sensor → website slot
-// Sensor 1 = V1 (VIP), Sensor 2 = P1 (public), Sensor 3 = P2 (public)
+// Sensor 1 = P1 (public), Sensor 2 = P2 (public), Sensor 3 = V1 (VIP)
 const SENSOR_TO_SLOT = { 1: 'P1', 2: 'P2', 3: 'V1' };
 
 // -----------------------------------------------------------
@@ -122,14 +122,12 @@ app.get('/api/slots', async (req, res) => {
   try {
     const date = req.query.date || new Date().toISOString().split('T')[0];
 
-    // Reserved bookings for the day
     const reservedResult = await pool.query(
       'SELECT slot_id FROM reservations WHERE date = $1 AND status = $2',
       [date, 'active']
     );
     const reserved = reservedResult.rows.map(r => r.slot_id);
 
-    // Physical sensor state
     const sensorResult = await pool.query('SELECT slot_id, occupied FROM slot_sensors');
     const sensorMap = {};
     sensorResult.rows.forEach(r => { sensorMap[r.slot_id] = r.occupied; });
@@ -166,7 +164,7 @@ app.get('/api/slots', async (req, res) => {
 });
 
 // -----------------------------------------------------------
-// Hardware endpoint — ESP32 posts sensor updates here
+// Hardware endpoint — ESP32 posts one sensor update
 // -----------------------------------------------------------
 app.post('/api/hardware/slot-update', async (req, res) => {
   try {
@@ -202,6 +200,43 @@ app.post('/api/hardware/slot-update', async (req, res) => {
 });
 
 // -----------------------------------------------------------
+// Hardware endpoint — batch (all 3 sensors at once)  [NEW]
+// -----------------------------------------------------------
+app.post('/api/hardware/batch-update', async (req, res) => {
+  try {
+    const key = req.headers['x-api-key'];
+    if (key !== HARDWARE_API_KEY) {
+      return res.status(401).json({ error: 'Invalid API key' });
+    }
+
+    const { sensors } = req.body;
+    if (!Array.isArray(sensors)) {
+      return res.status(400).json({ error: 'sensors array required' });
+    }
+
+    for (const s of sensors) {
+      const slotId = SENSOR_TO_SLOT[s.sensorId];
+      if (!slotId) continue;
+
+      await pool.query(
+        `INSERT INTO slot_sensors (slot_id, occupied, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (slot_id) DO UPDATE
+           SET occupied = EXCLUDED.occupied, updated_at = NOW()`,
+        [slotId, s.occupied]
+      );
+    }
+
+    console.log('[HW] Batch update:',
+      sensors.map(s => `${s.sensorId}=${s.occupied}`).join(' '));
+    res.json({ ok: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -----------------------------------------------------------
 // Reservations
 // -----------------------------------------------------------
 app.post('/api/reservations', auth, async (req, res) => {
@@ -210,7 +245,6 @@ app.post('/api/reservations', auth, async (req, res) => {
     if (!slotId || !date || !time)
       return res.status(400).json({ error: 'Missing booking details' });
 
-    // Block if already reserved
     const conflict = await pool.query(
       'SELECT id FROM reservations WHERE slot_id = $1 AND date = $2 AND status = $3',
       [slotId, date, 'active']
@@ -218,7 +252,6 @@ app.post('/api/reservations', auth, async (req, res) => {
     if (conflict.rows.length > 0)
       return res.status(400).json({ error: 'Slot already booked for this date' });
 
-    // Block if physically occupied right now
     const sensor = await pool.query(
       'SELECT occupied FROM slot_sensors WHERE slot_id = $1',
       [slotId]
@@ -227,7 +260,7 @@ app.post('/api/reservations', auth, async (req, res) => {
       return res.status(400).json({ error: 'That slot is currently occupied' });
     }
 
-    // ===== NEW: Generate a 4-digit code for VIP bookings =====
+    // Generate a 4-digit code for VIP bookings
     let code = null;
     if (slotId === 'V1') {
       code = String(Math.floor(1000 + Math.random() * 9000));
@@ -265,10 +298,9 @@ app.delete('/api/reservations/:id', auth, async (req, res) => {
 });
 
 // -----------------------------------------------------------
-// VIP gate control (NEW)
+// VIP gate control
 // -----------------------------------------------------------
 
-// User enters 4-digit code on website → this verifies it
 app.post('/api/vip/verify-code', auth, async (req, res) => {
   try {
     const { code } = req.body;
@@ -304,7 +336,6 @@ app.post('/api/vip/verify-code', auth, async (req, res) => {
   }
 });
 
-// ESP32 polls this to check if it should open the VIP gate
 app.get('/api/vip/command', async (req, res) => {
   try {
     const result = await pool.query('SELECT open_vip FROM vip_command WHERE id = 1');
@@ -314,7 +345,6 @@ app.get('/api/vip/command', async (req, res) => {
   }
 });
 
-// ESP32 confirms the gate was opened
 app.post('/api/vip/command/ack', async (req, res) => {
   try {
     await pool.query('UPDATE vip_command SET open_vip = false WHERE id = 1');
