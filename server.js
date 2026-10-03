@@ -200,7 +200,7 @@ app.post('/api/hardware/slot-update', async (req, res) => {
 });
 
 // -----------------------------------------------------------
-// Hardware endpoint — batch (all 3 sensors at once)  [NEW]
+// Hardware endpoint — batch (all 3 sensors at once)
 // -----------------------------------------------------------
 app.post('/api/hardware/batch-update', async (req, res) => {
   try {
@@ -309,12 +309,13 @@ app.post('/api/vip/verify-code', auth, async (req, res) => {
       return res.status(400).json({ error: '4-digit code required' });
     }
 
+    // ← FIX: cast CURRENT_DATE to text so it matches the TEXT 'date' column
     const result = await pool.query(
       `SELECT * FROM reservations 
        WHERE code = $1 
          AND slot_id = 'V1' 
          AND status = 'active'
-         AND date = CURRENT_DATE
+         AND date = CURRENT_DATE::text
        LIMIT 1`,
       [String(code)]
     );
