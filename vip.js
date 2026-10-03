@@ -1,10 +1,10 @@
-/* =========================================================
+/*
    SmartPark — VIP page logic
-   - Fetches live slot availability
-   - Handles slot selection + reservation
-   - Shows the generated 4-digit VIP code after booking
-   - Lets the user enter their code at the gate to open the VIP servo
-   ========================================================= */
+     Fetches live slot availability
+     Handles slot selection + reservation
+     Shows the generated 4-digit VIP code after booking
+     Lets the user enter their code at the gate to open the VIP servo
+   */
 
 const API_BASE = '';
 const TOKEN = localStorage.getItem('smartpark_token');
@@ -45,9 +45,10 @@ function showToast(msg, success = true) {
   setTimeout(() => toast.classList.remove('show'), 2800);
 }
 
-/* =========================================================
+/* 
    Inject the "Enter VIP code" panel + "Your codes" panel
-   ========================================================= */
+   */
+
 function ensureVipCodeUI() {
   // ---- Code entry panel ----
   if (!document.getElementById('vip-gate-panel')) {
@@ -103,9 +104,9 @@ function ensureVipCodeUI() {
   }
 }
 
-/* =========================================================
+/* 
    Submit the 4-digit code to open the VIP gate
-   ========================================================= */
+  */
 async function submitVipCode() {
   const input = document.getElementById('vip-code-input');
   const btn = document.getElementById('vip-code-submit');

@@ -113,11 +113,7 @@ const SLOTS = [
 
 // ESP32 physical sensor → website slot
 // Sensor 1 = V1 (VIP), Sensor 2 = P1 (public), Sensor 3 = P2 (public)
-const SENSOR_TO_SLOT = {
-  1: 'V1',
-  2: 'P1',
-  3: 'P2'
-};
+const SENSOR_TO_SLOT = { 1: 'P1', 2: 'P2', 3: 'V1' };
 
 // -----------------------------------------------------------
 // Slots — merges reservations + physical sensors
