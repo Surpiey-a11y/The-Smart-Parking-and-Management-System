@@ -237,6 +237,35 @@ app.post('/api/hardware/batch-update', async (req, res) => {
 });
 
 // -----------------------------------------------------------
+// Hardware endpoint — ESP32 polls this for reservation state
+// -----------------------------------------------------------
+app.get('/api/hardware/status', async (req, res) => {
+  try {
+    const key = req.headers['x-api-key'];
+    if (key !== HARDWARE_API_KEY) {
+      return res.status(401).json({ error: 'Invalid API key' });
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+
+    const reservedResult = await pool.query(
+      'SELECT slot_id FROM reservations WHERE date = $1 AND status = $2',
+      [today, 'active']
+    );
+    const reserved = reservedResult.rows.map(r => r.slot_id);
+
+    res.json({
+      reservedV1: reserved.includes('V1') ? 1 : 0,
+      reservedP1: reserved.includes('P1') ? 1 : 0,
+      reservedP2: reserved.includes('P2') ? 1 : 0
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// -----------------------------------------------------------
 // Reservations
 // -----------------------------------------------------------
 app.post('/api/reservations', auth, async (req, res) => {
@@ -309,7 +338,6 @@ app.post('/api/vip/verify-code', auth, async (req, res) => {
       return res.status(400).json({ error: '4-digit code required' });
     }
 
-    // ← FIX: cast CURRENT_DATE to text so it matches the TEXT 'date' column
     const result = await pool.query(
       `SELECT * FROM reservations 
        WHERE code = $1 
