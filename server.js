@@ -231,9 +231,16 @@ app.post('/api/reservations', auth, async (req, res) => {
       return res.status(400).json({ error: 'That slot is currently occupied' });
     }
 
+    // ===== NEW: Generate a 4-digit code for VIP bookings =====
+    let code = null;
+    if (slotId === 'V1') {
+      code = String(Math.floor(1000 + Math.random() * 9000));
+      console.log(`[VIP] Booking V1 — code generated: ${code}`);
+    }
+
     const result = await pool.query(
-      'INSERT INTO reservations (user_id, slot_id, date, time, duration) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [req.userId, slotId, date, time, duration || 1]
+      'INSERT INTO reservations (user_id, slot_id, date, time, duration, code) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [req.userId, slotId, date, time, duration || 1, code]
     );
 
     res.json(result.rows[0]);
@@ -259,6 +266,67 @@ app.delete('/api/reservations/:id', auth, async (req, res) => {
   if (result.rows.length === 0)
     return res.status(404).json({ error: 'Reservation not found' });
   res.json({ success: true });
+});
+
+// -----------------------------------------------------------
+// VIP gate control (NEW)
+// -----------------------------------------------------------
+
+// User enters 4-digit code on website → this verifies it
+app.post('/api/vip/verify-code', auth, async (req, res) => {
+  try {
+    const { code } = req.body;
+
+    if (!code || String(code).length !== 4) {
+      return res.status(400).json({ error: '4-digit code required' });
+    }
+
+    const result = await pool.query(
+      `SELECT * FROM reservations 
+       WHERE code = $1 
+         AND slot_id = 'V1' 
+         AND status = 'active'
+         AND date = CURRENT_DATE
+       LIMIT 1`,
+      [String(code)]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired VIP code' });
+    }
+
+    await pool.query(
+      `INSERT INTO vip_command (id, open_vip) VALUES (1, true)
+       ON CONFLICT (id) DO UPDATE SET open_vip = true`
+    );
+
+    console.log(`[VIP] Code ${code} verified — gate command sent`);
+    res.json({ ok: true, message: 'VIP gate opening...' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ESP32 polls this to check if it should open the VIP gate
+app.get('/api/vip/command', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT open_vip FROM vip_command WHERE id = 1');
+    res.json({ openVIP: result.rows[0]?.open_vip || false });
+  } catch (err) {
+    res.status(500).json({ openVIP: false, error: err.message });
+  }
+});
+
+// ESP32 confirms the gate was opened
+app.post('/api/vip/command/ack', async (req, res) => {
+  try {
+    await pool.query('UPDATE vip_command SET open_vip = false WHERE id = 1');
+    console.log('[VIP] Gate opened — command reset');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Serve index.html for unknown routes
