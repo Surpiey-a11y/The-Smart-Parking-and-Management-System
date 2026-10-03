@@ -1,10 +1,6 @@
-/*
+/* =========================================================
    SmartPark — VIP page logic
-     Fetches live slot availability
-     Handles slot selection + reservation
-     Shows the generated 4-digit VIP code after booking
-     Lets the user enter their code at the gate to open the VIP servo
-   */
+   ========================================================= */
 
 const API_BASE = '';
 const TOKEN = localStorage.getItem('smartpark_token');
@@ -25,9 +21,12 @@ if (userRaw) {
 let selectedSlotId = null;
 let allSlots = [];
 
-const container = document.getElementById('vip-slots-container');
-const label = document.getElementById('selected-slot-label');
-const confirmBtn = document.getElementById('confirm-vip-btn');
+const container      = document.getElementById('vip-slots-container');
+const label          = document.getElementById('selected-slot-label');
+const confirmBtn     = document.getElementById('confirm-vip-btn');
+const myListEl       = document.getElementById('my-reservations-list');
+const mySectionEl    = document.getElementById('my-reservations-section');
+const gatePanel      = document.getElementById('vip-gate-panel');
 
 function showToast(msg, success = true) {
   const toast = document.getElementById('toast');
@@ -36,164 +35,15 @@ function showToast(msg, success = true) {
   toastText.textContent = msg;
   const icon = toast.querySelector('i');
   if (icon) {
-    icon.className = success
-      ? 'fas fa-check-circle'
-      : 'fas fa-exclamation-circle';
+    icon.className = success ? 'fas fa-check-circle' : 'fas fa-exclamation-circle';
     icon.style.color = success ? '#22c55e' : '#f97316';
   }
   toast.classList.add('show');
   setTimeout(() => toast.classList.remove('show'), 2800);
 }
 
-/* 
-   Inject the "Enter VIP code" panel + "Your codes" panel
-   */
-
-function ensureVipCodeUI() {
-  // ---- Code entry panel ----
-  if (!document.getElementById('vip-gate-panel')) {
-    const panel = document.createElement('div');
-    panel.id = 'vip-gate-panel';
-    panel.style.margin = '24px auto';
-    panel.style.maxWidth = '480px';
-    panel.style.padding = '20px';
-    panel.style.borderRadius = '12px';
-    panel.style.background = 'rgba(168, 85, 247, 0.12)';
-    panel.style.border = '1px solid rgba(168, 85, 247, 0.4)';
-
-    panel.innerHTML = `
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
-        <i class="fas fa-key" style="color:#a855f7;font-size:18px;"></i>
-        <strong style="font-size:15px;">Enter your VIP code at the gate</strong>
-      </div>
-      <div style="display:flex;gap:8px;">
-        <input id="vip-code-input" type="text" maxlength="4" inputmode="numeric"
-          placeholder="4-digit code"
-          style="flex:1;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.15);
-                 background:rgba(0,0,0,0.25);color:inherit;font-size:18px;letter-spacing:6px;
-                 text-align:center;outline:none;" />
-        <button id="vip-code-submit"
-          style="padding:12px 20px;border-radius:8px;border:none;cursor:pointer;
-                 background:#a855f7;color:white;font-weight:600;">
-          Open Gate
-        </button>
-      </div>
-      <div id="vip-code-msg" style="margin-top:10px;font-size:13px;min-height:18px;"></div>
-    `;
-
-    document.body.appendChild(panel);
-
-    document.getElementById('vip-code-submit').addEventListener('click', submitVipCode);
-    document.getElementById('vip-code-input').addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') submitVipCode();
-    });
-  }
-
-  // ---- My codes panel (populated after booking / on load) ----
-  if (!document.getElementById('my-vip-codes')) {
-    const box = document.createElement('div');
-    box.id = 'my-vip-codes';
-    box.style.margin = '24px auto';
-    box.style.maxWidth = '480px';
-    box.style.padding = '16px 20px';
-    box.style.borderRadius = '12px';
-    box.style.background = 'rgba(255,255,255,0.04)';
-    box.style.border = '1px solid rgba(255,255,255,0.08)';
-    box.style.display = 'none';
-    document.body.appendChild(box);
-  }
-}
-
-/* 
-   Submit the 4-digit code to open the VIP gate
-  */
-async function submitVipCode() {
-  const input = document.getElementById('vip-code-input');
-  const btn = document.getElementById('vip-code-submit');
-  const msg = document.getElementById('vip-code-msg');
-
-  const code = (input.value || '').trim();
-  if (code.length !== 4) {
-    msg.style.color = '#f97316';
-    msg.textContent = 'Please enter the 4-digit code.';
-    return;
-  }
-
-  btn.disabled = true;
-  btn.textContent = 'Opening…';
-  msg.textContent = '';
-
-  try {
-    const res = await fetch(`${API_BASE}/api/vip/verify-code`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${TOKEN}`
-      },
-      body: JSON.stringify({ code })
-    });
-    const data = await res.json();
-
-    if (!res.ok) throw new Error(data.error || 'Invalid code');
-
-    msg.style.color = '#22c55e';
-    msg.textContent = '✅ Gate opening — please proceed.';
-    input.value = '';
-    showToast('VIP gate opening…');
-  } catch (err) {
-    msg.style.color = '#f97316';
-    msg.textContent = '❌ ' + err.message;
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Open Gate';
-  }
-}
-
 /* =========================================================
-   Show the user's active VIP codes
-   ========================================================= */
-async function loadMyVipCodes() {
-  const box = document.getElementById('my-vip-codes');
-  if (!box) return;
-
-  try {
-    const res = await fetch(`${API_BASE}/api/reservations/my`, {
-      headers: { Authorization: `Bearer ${TOKEN}` }
-    });
-    if (!res.ok) return;
-    const list = await res.json();
-
-    const vipWithCode = list.filter(r => r.slot_id === 'V1' && r.code);
-
-    if (vipWithCode.length === 0) {
-      box.style.display = 'none';
-      return;
-    }
-
-    box.style.display = 'block';
-    box.innerHTML = `
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
-        <i class="fas fa-ticket-alt" style="color:#a855f7;"></i>
-        <strong>Your VIP code${vipWithCode.length > 1 ? 's' : ''}</strong>
-      </div>
-      ${vipWithCode.map(r => `
-        <div style="display:flex;justify-content:space-between;align-items:center;
-                    padding:10px;border-radius:8px;background:rgba(168,85,247,0.15);margin-top:6px;">
-          <span style="opacity:0.8;font-size:13px;">${r.date}</span>
-          <strong style="font-size:22px;letter-spacing:6px;color:#a855f7;">${r.code}</strong>
-        </div>
-      `).join('')}
-      <div style="margin-top:10px;font-size:12px;opacity:0.7;">
-        Use this code at the VIP gate to open the servo.
-      </div>
-    `;
-  } catch (err) {
-    console.warn('loadMyVipCodes failed:', err.message);
-  }
-}
-
-/* =========================================================
-   Slot rendering (unchanged)
+   Slot rendering
    ========================================================= */
 function renderSlots(slots, summary) {
   container.innerHTML = '';
@@ -251,7 +101,6 @@ function selectSlot(id) {
   selectedSlotId = id;
   label.textContent = `Selected: ${id}`;
   confirmBtn.disabled = false;
-
   document.querySelectorAll('.slot-card').forEach(c => {
     c.style.outline = c.dataset.slotId === id ? '2px solid #a855f7' : 'none';
   });
@@ -270,7 +119,142 @@ async function loadSlots() {
 }
 
 /* =========================================================
-   Confirm booking — now shows the code if VIP
+   My Reservations + Cancel
+   ========================================================= */
+async function loadMyReservations() {
+  if (!myListEl) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/reservations/my`, {
+      headers: { Authorization: `Bearer ${TOKEN}` }
+    });
+    if (!res.ok) return;
+    const list = await res.json();
+
+    const active = list.filter(r => r.status === 'active');
+
+    if (active.length === 0) {
+      mySectionEl.style.display = 'none';
+      gatePanel.style.display = 'none';
+      return;
+    }
+
+    mySectionEl.style.display = 'block';
+
+    const hasVip = active.some(r => r.slot_id === 'V1' && r.code);
+    gatePanel.style.display = hasVip ? 'block' : 'none';
+
+    myListEl.innerHTML = active.map(r => {
+      const isVip = r.slot_id === 'V1';
+      const badge = isVip
+        ? '<span style="background:#a855f7;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">VIP</span>'
+        : '<span style="background:#3b82f6;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">PUBLIC</span>';
+
+      return `
+        <div style="padding:14px;border-radius:10px;background:rgba(255,255,255,0.05);
+                    margin-top:8px;border:1px solid rgba(255,255,255,0.08);">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+            <div style="flex:1;">
+              <div style="font-weight:600;font-size:15px;">
+                Slot ${r.slot_id} ${badge}
+              </div>
+              <div style="font-size:12px;opacity:0.7;margin-top:4px;">
+                📅 ${r.date} · 🕐 ${r.time || ''}
+              </div>
+            </div>
+            ${isVip && r.code ? `
+              <div style="text-align:right;">
+                <div style="font-size:10px;opacity:0.6;">CODE</div>
+                <strong style="font-size:22px;letter-spacing:4px;color:#a855f7;">
+                  ${r.code}
+                </strong>
+              </div>
+            ` : ''}
+          </div>
+          <button data-cancel-id="${r.id}"
+            style="margin-top:12px;width:100%;padding:9px;border-radius:6px;
+                   border:1px solid rgba(249,115,22,0.4);cursor:pointer;
+                   background:rgba(249,115,22,0.1);color:#f97316;
+                   font-size:13px;font-weight:600;">
+            <i class="fas fa-times"></i> Cancel this reservation
+          </button>
+        </div>
+      `;
+    }).join('');
+
+    myListEl.querySelectorAll('[data-cancel-id]').forEach(btn => {
+      btn.addEventListener('click', () => cancelReservation(btn.dataset.cancelId));
+    });
+
+  } catch (err) {
+    console.warn('loadMyReservations failed:', err.message);
+  }
+}
+
+async function cancelReservation(id) {
+  if (!confirm('Cancel this reservation? The slot will become available again.')) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/reservations/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${TOKEN}` }
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Cancel failed');
+
+    showToast('Reservation cancelled ✅');
+    await loadMyReservations();
+    await loadSlots();
+  } catch (err) {
+    showToast(err.message, false);
+  }
+}
+
+/* =========================================================
+   VIP code entry
+   ========================================================= */
+async function submitVipCode() {
+  const input = document.getElementById('vip-code-input');
+  const btn = document.getElementById('vip-code-submit');
+  const msg = document.getElementById('vip-code-msg');
+
+  const code = (input.value || '').trim();
+  if (code.length !== 4) {
+    msg.style.color = '#f97316';
+    msg.textContent = 'Please enter the 4-digit code.';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Opening…';
+  msg.textContent = '';
+
+  try {
+    const res = await fetch(`${API_BASE}/api/vip/verify-code`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${TOKEN}`
+      },
+      body: JSON.stringify({ code })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Invalid code');
+
+    msg.style.color = '#22c55e';
+    msg.textContent = '✅ Gate opening — please proceed.';
+    input.value = '';
+    showToast('VIP gate opening…');
+  } catch (err) {
+    msg.style.color = '#f97316';
+    msg.textContent = '❌ ' + err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Open Gate';
+  }
+}
+
+/* =========================================================
+   Confirm new booking
    ========================================================= */
 confirmBtn?.addEventListener('click', async () => {
   if (!selectedSlotId) return;
@@ -299,14 +283,11 @@ confirmBtn?.addEventListener('click', async () => {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Booking failed');
 
-    // If VIP, show the code
     if (data.code) {
       showToast(`VIP booked! Your code: ${data.code}`);
-      // Big visual popup so user writes it down
       setTimeout(() => {
         alert(`Your VIP access code is:\n\n    ${data.code}\n\nWrite it down. You'll need it to open the VIP gate.`);
       }, 300);
-      loadMyVipCodes();
     } else {
       showToast(`Slot ${selectedSlotId} booked!`);
     }
@@ -314,6 +295,7 @@ confirmBtn?.addEventListener('click', async () => {
     selectedSlotId = null;
     label.textContent = 'No slot selected yet.';
     await loadSlots();
+    await loadMyReservations();
   } catch (err) {
     showToast(err.message, false);
   } finally {
@@ -323,9 +305,14 @@ confirmBtn?.addEventListener('click', async () => {
 });
 
 /* =========================================================
-   BOOT
+   Wire up code entry + boot
    ========================================================= */
-ensureVipCodeUI();
+document.getElementById('vip-code-submit')?.addEventListener('click', submitVipCode);
+document.getElementById('vip-code-input')?.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') submitVipCode();
+});
+
 loadSlots();
-loadMyVipCodes();
+loadMyReservations();
 setInterval(loadSlots, 5000);
+setInterval(loadMyReservations, 10000);
