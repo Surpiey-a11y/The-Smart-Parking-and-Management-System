@@ -296,12 +296,30 @@ app.post('/api/reservations', auth, async (req, res) => {
     if (!slotId || !date || !time)
       return res.status(400).json({ error: 'Missing booking details' });
 
+    const reservationDate = req.body.reservation_date || date;
+    const startTime = req.body.start_time || time;
+    const durationHours = duration || 1;
+    const durationMinutes = req.body.duration_minutes || durationHours * 60;
+
+    const startTs = `${reservationDate} ${startTime}`;
+    const startMs = new Date(`${reservationDate}T${startTime}:00`).getTime();
+    if (isNaN(startMs)) {
+      return res.status(400).json({ error: 'Invalid date or time' });
+    }
+    const endTs = new Date(startMs + durationMinutes * 60000)
+      .toISOString().slice(0, 19).replace('T', ' ');
+
     const conflict = await pool.query(
-      'SELECT id FROM reservations WHERE slot_id = $1 AND date = $2 AND status = $3',
-      [slotId, date, 'active']
+      `SELECT id FROM reservations
+       WHERE slot_id = $1
+         AND status = 'active'
+         AND (start_time, start_time + (COALESCE(duration_minutes, duration * 60, 60) || ' minutes')::interval)
+             OVERLAPS
+             ($2::timestamp, $3::timestamp)`,
+      [slotId, startTs, endTs]
     );
     if (conflict.rows.length > 0)
-      return res.status(400).json({ error: 'Slot already booked for this date' });
+      return res.status(400).json({ error: 'This time slot is already booked for this bay' });
 
     const sensor = await pool.query(
       'SELECT occupied FROM slot_sensors WHERE slot_id = $1',
@@ -311,7 +329,6 @@ app.post('/api/reservations', auth, async (req, res) => {
       return res.status(400).json({ error: 'That slot is currently occupied' });
     }
 
-    // Generate a 4-digit code for VIP bookings
     let code = null;
     if (slotId === 'V1') {
       code = String(Math.floor(1000 + Math.random() * 9000));
@@ -319,8 +336,13 @@ app.post('/api/reservations', auth, async (req, res) => {
     }
 
     const result = await pool.query(
-      'INSERT INTO reservations (user_id, slot_id, date, time, duration, code) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [req.userId, slotId, date, time, duration || 1, code]
+      `INSERT INTO reservations
+         (user_id, slot_id, date, time, duration,
+          reservation_date, start_time, duration_minutes, code)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [req.userId, slotId, reservationDate, startTime, durationHours,
+       reservationDate, startTime, durationMinutes, code]
     );
 
     res.json(result.rows[0]);
@@ -361,17 +383,33 @@ app.post('/api/vip/verify-code', auth, async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT * FROM reservations 
-       WHERE code = $1 
-         AND slot_id = 'V1' 
+      `SELECT * FROM reservations
+       WHERE code = $1
+         AND slot_id = 'V1'
          AND status = 'active'
-         AND date = CURRENT_DATE::text
+       ORDER BY created_at DESC
        LIMIT 1`,
       [String(code)]
     );
 
     if (result.rows.length === 0) {
       return res.status(400).json({ error: 'Invalid or expired VIP code' });
+    }
+
+    const r = result.rows[0];
+    const startDateTime = new Date(`${r.reservation_date}T${r.start_time}`);
+    const durationMin = r.duration_minutes || (r.duration || 2) * 60;
+    const endDateTime = new Date(startDateTime.getTime() + durationMin * 60 * 1000);
+    const now = new Date();
+    const graceMs = 15 * 60 * 1000;
+
+    if (now < new Date(startDateTime.getTime() - graceMs)) {
+      return res.status(400).json({
+        error: `Your booking starts at ${r.start_time} on ${r.reservation_date}. Please come back then.`
+      });
+    }
+    if (now > new Date(endDateTime.getTime() + graceMs)) {
+      return res.status(400).json({ error: 'Your booking time has expired.' });
     }
 
     await pool.query(
