@@ -309,15 +309,18 @@ app.post('/api/reservations', auth, async (req, res) => {
     const endTs = new Date(startMs + durationMinutes * 60000)
       .toISOString().slice(0, 19).replace('T', ' ');
 
-    const conflict = await pool.query(
-      `SELECT id FROM reservations
-       WHERE slot_id = $1
-         AND status = 'active'
-         AND (start_time, start_time + (COALESCE(duration_minutes, duration * 60, 60) || ' minutes')::interval)
-             OVERLAPS
-             ($2::timestamp, $3::timestamp)`,
-      [slotId, startTs, endTs]
-    );
+const conflict = await pool.query(
+  `SELECT id FROM reservations
+   WHERE slot_id = $1
+     AND status = 'active'
+     AND (
+       (reservation_date + start_time),
+       (reservation_date + start_time + (COALESCE(duration_minutes, duration * 60, 60) || ' minutes')::interval)
+     )
+     OVERLAPS
+     ($2::timestamp, $3::timestamp)`,
+  [slotId, startTs, endTs]
+);
     if (conflict.rows.length > 0)
       return res.status(400).json({ error: 'This time slot is already booked for this bay' });
 
