@@ -1,4 +1,3 @@
-// Smart Parking Backend - Neon Postgres + ESP32 hardware integration
 require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
@@ -16,43 +15,21 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
-// -----------------------------------------------------------
-// Database connection
-// -----------------------------------------------------------
-console.log('--- DB CONFIG CHECK ---');
-console.log('DATABASE_URL present:', process.env.DATABASE_URL ? 'YES' : 'NO');
-if (process.env.DATABASE_URL) {
-  const u = process.env.DATABASE_URL;
-  console.log('URL length:', u.length);
-  console.log('URL starts:', u.substring(0, 45));
-  console.log('URL ends:  ', u.slice(-40));
-}
-console.log('-----------------------');
-
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
 pool.on('error', (err) => {
-  console.error('Postgres pool error:');
-  console.error('  code:   ', err.code);
-  console.error('  message:', err.message);
+  console.error('Postgres pool error:', err.code, err.message);
 });
 
 (async () => {
   try {
     const r = await pool.query('SELECT NOW()');
-    console.log('✓ Connected to Neon Postgres at', r.rows[0].now);
+    console.log('Connected to Neon Postgres at', r.rows[0].now);
   } catch (err) {
-    console.error('✗ DB CONNECTION FAILED');
-    console.error('  code:   ', err.code);
-    console.error('  message:', err.message);
-    console.error('  detail: ', err.detail);
-    console.error('  hint:   ', err.hint);
-    console.error('  severity:', err.severity);
-    console.error('  full error object:');
-    console.error(err);
+    console.error('DB connection failed:', err.message);
   }
 })();
 
@@ -67,10 +44,6 @@ function auth(req, res, next) {
     res.status(401).json({ error: 'Invalid token' });
   }
 }
-
-// -----------------------------------------------------------
-// Auth
-// -----------------------------------------------------------
 
 app.post('/api/auth/register', async (req, res) => {
   try {
@@ -124,29 +97,40 @@ app.get('/api/auth/me', auth, async (req, res) => {
   res.json(result.rows[0]);
 });
 
-// -----------------------------------------------------------
-// Slot configuration — 1 VIP + 2 public
-// -----------------------------------------------------------
 const SLOTS = [
   { id: 'V1', type: 'vip' },
   { id: 'P1', type: 'public' },
   { id: 'P2', type: 'public' }
 ];
 
-// ESP32 physical sensor → website slot
-// Sensor 1 = P1 (public), Sensor 2 = P2 (public), Sensor 3 = V1 (VIP)
 const SENSOR_TO_SLOT = { 1: 'P1', 2: 'P2', 3: 'V1' };
 
-// -----------------------------------------------------------
-// Slots — merges reservations + physical sensors
-// -----------------------------------------------------------
 app.get('/api/slots', async (req, res) => {
   try {
     const date = req.query.date || new Date().toISOString().split('T')[0];
+    const time = req.query.time || '00:00';
+    const durationMinutes = parseInt(req.query.duration || '120', 10);
+
+    const startTs = `${date} ${time}`;
+    const startMs = new Date(`${date}T${time}:00`).getTime();
+    if (isNaN(startMs)) {
+      return res.status(400).json({ error: 'Invalid date or time' });
+    }
+    const endTs = new Date(startMs + durationMinutes * 60000)
+      .toISOString().slice(0, 19).replace('T', ' ');
 
     const reservedResult = await pool.query(
-      'SELECT slot_id FROM reservations WHERE date = $1 AND status = $2',
-      [date, 'active']
+      `SELECT slot_id FROM reservations
+       WHERE status = 'active'
+         AND reservation_date IS NOT NULL
+         AND start_time IS NOT NULL
+         AND (
+           (reservation_date + start_time),
+           (reservation_date + start_time + (COALESCE(duration_minutes, duration * 60, 60) || ' minutes')::interval)
+         )
+         OVERLAPS
+         ($1::timestamp, $2::timestamp)`,
+      [startTs, endTs]
     );
     const reserved = reservedResult.rows.map(r => r.slot_id);
 
@@ -185,9 +169,6 @@ app.get('/api/slots', async (req, res) => {
   }
 });
 
-// -----------------------------------------------------------
-// Hardware endpoint — ESP32 posts one sensor update
-// -----------------------------------------------------------
 app.post('/api/hardware/slot-update', async (req, res) => {
   try {
     const key = req.headers['x-api-key'];
@@ -213,7 +194,7 @@ app.post('/api/hardware/slot-update', async (req, res) => {
       [slotId, occupied]
     );
 
-    console.log(`[HW] Sensor ${sensorId} → ${slotId} = ${occupied ? 'OCCUPIED' : 'FREE'}`);
+    console.log(`[HW] Sensor ${sensorId} -> ${slotId} = ${occupied ? 'OCCUPIED' : 'FREE'}`);
     res.json({ ok: true, slotId, occupied });
   } catch (err) {
     console.error(err);
@@ -221,9 +202,6 @@ app.post('/api/hardware/slot-update', async (req, res) => {
   }
 });
 
-// -----------------------------------------------------------
-// Hardware endpoint — batch (all 3 sensors at once)
-// -----------------------------------------------------------
 app.post('/api/hardware/batch-update', async (req, res) => {
   try {
     const key = req.headers['x-api-key'];
@@ -258,9 +236,6 @@ app.post('/api/hardware/batch-update', async (req, res) => {
   }
 });
 
-// -----------------------------------------------------------
-// Hardware endpoint — ESP32 polls this for reservation state
-// -----------------------------------------------------------
 app.get('/api/hardware/status', async (req, res) => {
   try {
     const key = req.headers['x-api-key'];
@@ -287,9 +262,6 @@ app.get('/api/hardware/status', async (req, res) => {
   }
 });
 
-// -----------------------------------------------------------
-// Reservations
-// -----------------------------------------------------------
 app.post('/api/reservations', auth, async (req, res) => {
   try {
     const { slotId, date, time, duration } = req.body;
@@ -309,18 +281,18 @@ app.post('/api/reservations', auth, async (req, res) => {
     const endTs = new Date(startMs + durationMinutes * 60000)
       .toISOString().slice(0, 19).replace('T', ' ');
 
-const conflict = await pool.query(
-  `SELECT id FROM reservations
-   WHERE slot_id = $1
-     AND status = 'active'
-     AND (
-       (reservation_date + start_time),
-       (reservation_date + start_time + (COALESCE(duration_minutes, duration * 60, 60) || ' minutes')::interval)
-     )
-     OVERLAPS
-     ($2::timestamp, $3::timestamp)`,
-  [slotId, startTs, endTs]
-);
+    const conflict = await pool.query(
+      `SELECT id FROM reservations
+       WHERE slot_id = $1
+         AND status = 'active'
+         AND (
+           (reservation_date + start_time),
+           (reservation_date + start_time + (COALESCE(duration_minutes, duration * 60, 60) || ' minutes')::interval)
+         )
+         OVERLAPS
+         ($2::timestamp, $3::timestamp)`,
+      [slotId, startTs, endTs]
+    );
     if (conflict.rows.length > 0)
       return res.status(400).json({ error: 'This time slot is already booked for this bay' });
 
@@ -335,7 +307,7 @@ const conflict = await pool.query(
     let code = null;
     if (slotId === 'V1') {
       code = String(Math.floor(1000 + Math.random() * 9000));
-      console.log(`[VIP] Booking V1 — code generated: ${code}`);
+      console.log(`[VIP] Booking V1 - code generated: ${code}`);
     }
 
     const result = await pool.query(
@@ -372,10 +344,6 @@ app.delete('/api/reservations/:id', auth, async (req, res) => {
     return res.status(404).json({ error: 'Reservation not found' });
   res.json({ success: true });
 });
-
-// -----------------------------------------------------------
-// VIP gate control
-// -----------------------------------------------------------
 
 app.post('/api/vip/verify-code', auth, async (req, res) => {
   try {
@@ -420,7 +388,7 @@ app.post('/api/vip/verify-code', auth, async (req, res) => {
        ON CONFLICT (id) DO UPDATE SET open_vip = true`
     );
 
-    console.log(`[VIP] Code ${code} verified — gate command sent`);
+    console.log(`[VIP] Code ${code} verified - gate command sent`);
     res.json({ ok: true, message: 'VIP gate opening...' });
   } catch (err) {
     console.error(err);
@@ -440,14 +408,13 @@ app.get('/api/vip/command', async (req, res) => {
 app.post('/api/vip/command/ack', async (req, res) => {
   try {
     await pool.query('UPDATE vip_command SET open_vip = false WHERE id = 1');
-    console.log('[VIP] Gate opened — command reset');
+    console.log('[VIP] Gate opened - command reset');
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Serve index.html for unknown routes
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
