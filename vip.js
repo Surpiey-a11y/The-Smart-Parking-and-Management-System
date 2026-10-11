@@ -1,7 +1,3 @@
-/* =========================================================
-   SmartPark — VIP page logic
-   ========================================================= */
-
 const API_BASE = '';
 const TOKEN = localStorage.getItem('smartpark_token');
 
@@ -28,6 +24,12 @@ const myListEl       = document.getElementById('my-reservations-list');
 const mySectionEl    = document.getElementById('my-reservations-section');
 const gatePanel      = document.getElementById('vip-gate-panel');
 
+const dateInput      = document.getElementById('booking-date');
+const timeInput      = document.getElementById('booking-time');
+const durationSelect = document.getElementById('booking-duration');
+const summaryBar     = document.getElementById('booking-summary');
+const summaryText    = document.getElementById('booking-summary-text');
+
 function showToast(msg, success = true) {
   const toast = document.getElementById('toast');
   const toastText = document.getElementById('toast-text');
@@ -42,9 +44,65 @@ function showToast(msg, success = true) {
   setTimeout(() => toast.classList.remove('show'), 2800);
 }
 
-/* =========================================================
-   Slot rendering
-   ========================================================= */
+function initDateTimeInputs() {
+  if (!dateInput || !timeInput) return;
+
+  const today = new Date().toISOString().split('T')[0];
+  dateInput.setAttribute('min', today);
+  if (!dateInput.value) dateInput.value = today;
+
+  if (!timeInput.value) {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + 15);
+    now.setMinutes(Math.ceil(now.getMinutes() / 15) * 15, 0, 0);
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    timeInput.value = `${hh}:${mm}`;
+  }
+}
+
+function getBookingDateTime() {
+  if (!dateInput || !timeInput) return null;
+  const d = dateInput.value;
+  const t = timeInput.value;
+  if (!d || !t) return null;
+  const dt = new Date(`${d}T${t}:00`);
+  if (isNaN(dt.getTime())) return null;
+  return dt;
+}
+
+function updateSummaryAndSlots() {
+  if (!summaryText || !summaryBar) return;
+
+  const dt = getBookingDateTime();
+  if (!dt) {
+    summaryText.textContent = 'Choose a date and time to see available slots.';
+    summaryBar.classList.remove('warn');
+    confirmBtn.disabled = true;
+    return;
+  }
+
+  if (dt < new Date()) {
+    summaryBar.classList.add('warn');
+    summaryText.textContent = 'The selected time is in the past. Please choose a future time.';
+    confirmBtn.disabled = true;
+    return;
+  }
+
+  summaryBar.classList.remove('warn');
+
+  const dur = parseInt(durationSelect?.value || '120', 10);
+  const hrs = dur / 60;
+  const durLabel = hrs === 1 ? '1 hour' : `${hrs} hours`;
+  summaryText.textContent = `Booking for ${dateInput.value} at ${timeInput.value} — ${durLabel}.`;
+
+  if (selectedSlotId) {
+    confirmBtn.disabled = false;
+  }
+
+  loadSlots();
+}
+
 function renderSlots(slots, summary) {
   container.innerHTML = '';
 
@@ -99,8 +157,16 @@ function renderSlots(slots, summary) {
 
 function selectSlot(id) {
   selectedSlotId = id;
-  label.textContent = `Selected: ${id}`;
-  confirmBtn.disabled = false;
+
+  const dt = getBookingDateTime();
+  if (dt && dt >= new Date()) {
+    label.textContent = `Selected: ${id} — ${dateInput.value} at ${timeInput.value}`;
+    confirmBtn.disabled = false;
+  } else {
+    label.textContent = `Selected: ${id} (choose a valid date/time)`;
+    confirmBtn.disabled = true;
+  }
+
   document.querySelectorAll('.slot-card').forEach(c => {
     c.style.outline = c.dataset.slotId === id ? '2px solid #a855f7' : 'none';
   });
@@ -108,7 +174,15 @@ function selectSlot(id) {
 
 async function loadSlots() {
   try {
-    const res = await fetch(`${API_BASE}/api/slots`);
+    const params = new URLSearchParams();
+    if (dateInput?.value) params.set('date', dateInput.value);
+    if (timeInput?.value) params.set('time', timeInput.value);
+    if (durationSelect?.value) params.set('duration', durationSelect.value);
+
+    const qs = params.toString();
+    const url = qs ? `${API_BASE}/api/slots?${qs}` : `${API_BASE}/api/slots`;
+
+    const res = await fetch(url);
     if (!res.ok) throw new Error('Failed to load slots');
     const data = await res.json();
     allSlots = data.slots;
@@ -118,9 +192,6 @@ async function loadSlots() {
   }
 }
 
-/* =========================================================
-   My Reservations + Cancel
-   ========================================================= */
 async function loadMyReservations() {
   if (!myListEl) return;
   try {
@@ -149,6 +220,12 @@ async function loadMyReservations() {
         ? '<span style="background:#a855f7;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">VIP</span>'
         : '<span style="background:#3b82f6;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">PUBLIC</span>';
 
+      const dateStr = r.reservation_date || r.date || '';
+      const timeStr = r.start_time || r.time || '';
+      const durStr = r.duration_minutes
+        ? `${r.duration_minutes} min`
+        : (r.duration ? `${r.duration} h` : '');
+
       return `
         <div style="padding:14px;border-radius:10px;background:rgba(255,255,255,0.05);
                     margin-top:8px;border:1px solid rgba(255,255,255,0.08);">
@@ -158,7 +235,7 @@ async function loadMyReservations() {
                 Slot ${r.slot_id} ${badge}
               </div>
               <div style="font-size:12px;opacity:0.7;margin-top:4px;">
-                📅 ${r.date} · 🕐 ${r.time || ''}
+                📅 ${dateStr} · 🕐 ${timeStr}${durStr ? ' · ⏱ ' + durStr : ''}
               </div>
             </div>
             ${isVip && r.code ? `
@@ -209,9 +286,6 @@ async function cancelReservation(id) {
   }
 }
 
-/* =========================================================
-   VIP code entry
-   ========================================================= */
 async function submitVipCode() {
   const input = document.getElementById('vip-code-input');
   const btn = document.getElementById('vip-code-submit');
@@ -253,18 +327,20 @@ async function submitVipCode() {
   }
 }
 
-/* =========================================================
-   Confirm new booking
-   ========================================================= */
 confirmBtn?.addEventListener('click', async () => {
   if (!selectedSlotId) return;
+
+  const dt = getBookingDateTime();
+  if (!dt || dt < new Date()) {
+    showToast('Please choose a valid future date and time.', false);
+    return;
+  }
 
   confirmBtn.disabled = true;
   const original = confirmBtn.innerHTML;
   confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Booking…';
 
-  const today = new Date().toISOString().split('T')[0];
-  const time = new Date().toTimeString().slice(0, 5);
+  const durationMinutes = parseInt(durationSelect?.value || '120', 10);
 
   try {
     const res = await fetch(`${API_BASE}/api/reservations`, {
@@ -275,9 +351,13 @@ confirmBtn?.addEventListener('click', async () => {
       },
       body: JSON.stringify({
         slotId: selectedSlotId,
-        date: today,
-        time,
-        duration: 2
+        slot_id: selectedSlotId,
+        date: dateInput.value,
+        reservation_date: dateInput.value,
+        time: timeInput.value,
+        start_time: timeInput.value,
+        duration: Math.max(1, Math.round(durationMinutes / 60)),
+        duration_minutes: durationMinutes
       })
     });
     const data = await res.json();
@@ -286,7 +366,15 @@ confirmBtn?.addEventListener('click', async () => {
     if (data.code) {
       showToast(`VIP booked! Your code: ${data.code}`);
       setTimeout(() => {
-        alert(`Your VIP access code is:\n\n    ${data.code}\n\nWrite it down. You'll need it to open the VIP gate.`);
+        alert(
+          `Your VIP booking is confirmed.\n\n` +
+          `Bay: ${selectedSlotId}\n` +
+          `Date: ${dateInput.value}\n` +
+          `Time: ${timeInput.value}\n` +
+          `Duration: ${durationMinutes} minutes\n\n` +
+          `Your access code is: ${data.code}\n\n` +
+          `Write it down. You'll need it to open the VIP gate.`
+        );
       }, 300);
     } else {
       showToast(`Slot ${selectedSlotId} booked!`);
@@ -304,13 +392,17 @@ confirmBtn?.addEventListener('click', async () => {
   }
 });
 
-/* =========================================================
-   Wire up code entry + boot
-   ========================================================= */
 document.getElementById('vip-code-submit')?.addEventListener('click', submitVipCode);
 document.getElementById('vip-code-input')?.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') submitVipCode();
 });
+
+dateInput?.addEventListener('change', updateSummaryAndSlots);
+timeInput?.addEventListener('change', updateSummaryAndSlots);
+durationSelect?.addEventListener('change', updateSummaryAndSlots);
+
+initDateTimeInputs();
+updateSummaryAndSlots();
 
 loadSlots();
 loadMyReservations();

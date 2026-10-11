@@ -189,3 +189,216 @@ h1 i { color: #7dd3fc; }
 .hidden {
   display: none !important;
 }
+
+.booking-datetime {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 1.25rem;
+  background: rgba(15, 28, 45, 0.7);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 1.5rem;
+}
+
+.datetime-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.datetime-field label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #cbd5e1;
+  letter-spacing: 0.02em;
+}
+
+.datetime-field label i {
+  color: #38bdf8;
+  font-size: 0.9rem;
+}
+
+.datetime-field input,
+.datetime-field select {
+  width: 100%;
+  padding: 0.8rem 1rem;
+  background: #0f1c2b;
+  border: 1px solid #1e3a5f;
+  border-radius: 1rem;
+  font-size: 0.95rem;
+  color: #f0f9ff;
+  outline: none;
+  transition: 0.2s;
+  font-family: inherit;
+}
+
+.datetime-field input:focus,
+.datetime-field select:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.15);
+}
+
+.datetime-field input::-webkit-calendar-picker-indicator {
+  filter: invert(0.7) sepia(1) saturate(5) hue-rotate(160deg);
+  cursor: pointer;
+}
+
+.datetime-field select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2338bdf8' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 1rem center;
+  padding-right: 2.5rem;
+  cursor: pointer;
+}
+
+.datetime-field select option {
+  background: #0f1c2b;
+  color: #f0f9ff;
+}
+
+.booking-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.5rem;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px dashed rgba(56, 189, 248, 0.35);
+  border-radius: 1rem;
+  font-size: 0.88rem;
+  color: #bae6fd;
+}
+
+.booking-summary i {
+  color: #38bdf8;
+}
+
+.booking-summary.warn {
+  background: rgba(234, 179, 8, 0.1);
+  border-color: rgba(234, 179, 8, 0.4);
+  color: #fde68a;
+}
+.booking-summary.warn i {
+  color: #eab308;
+}
+
+.slots-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.slot-card {
+  padding: 1.25rem 1rem;
+  background: rgba(15, 28, 45, 0.7);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: 1.25rem;
+  text-align: center;
+  cursor: pointer;
+  transition: 0.2s;
+  color: #e2e8f0;
+}
+
+.slot-card:hover:not(.unavailable) {
+  border-color: #a855f7;
+  transform: translateY(-3px);
+  box-shadow: 0 12px 25px -10px rgba(168, 85, 247, 0.6);
+}
+
+.slot-card.selected {
+  border-color: #a855f7;
+  background: rgba(168, 85, 247, 0.15);
+  box-shadow: 0 12px 25px -10px rgba(168, 85, 247, 0.7);
+}
+
+.slot-card.unavailable {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(0.5);
+}
+
+.slot-card .slot-id {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.slot-card .slot-status {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+}
+
+.slot-card.selected .slot-status {
+  color: #d8b4fe;
+}
+
+.reserve-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.5rem;
+  margin-top: 1rem;
+  background: rgba(15, 28, 45, 0.7);
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  border-radius: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.reserve-section .btn {
+  width: auto;
+}
+
+.reserve-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex: 1;
+  min-width: 220px;
+}
+
+.reserve-info i {
+  font-size: 1.6rem;
+  color: #a855f7;
+}
+
+.reserve-info h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 0.2rem;
+}
+
+.reserve-info p {
+  font-size: 0.85rem;
+  color: #94a3b8;
+}
+
+.btn-vip {
+  background: linear-gradient(135deg, #a855f7, #7c3aed);
+  box-shadow: 0 8px 20px -6px #a855f7;
+}
+
+@media (max-width: 700px) {
+  h1 { font-size: 1.8rem; }
+  .app-container { padding: 1.25rem; border-radius: 1.5rem; }
+  .booking-datetime {
+    grid-template-columns: 1fr;
+  }
+  .reserve-section {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .reserve-section .btn {
+    width: 100%;
+  }
+}

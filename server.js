@@ -16,21 +16,43 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
+// -----------------------------------------------------------
+// Database connection
+// -----------------------------------------------------------
+console.log('--- DB CONFIG CHECK ---');
+console.log('DATABASE_URL present:', process.env.DATABASE_URL ? 'YES' : 'NO');
+if (process.env.DATABASE_URL) {
+  const u = process.env.DATABASE_URL;
+  console.log('URL length:', u.length);
+  console.log('URL starts:', u.substring(0, 45));
+  console.log('URL ends:  ', u.slice(-40));
+}
+console.log('-----------------------');
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { require: true }
+  ssl: { rejectUnauthorized: false }
 });
 
 pool.on('error', (err) => {
-  console.error('Postgres pool error:', err.message);
+  console.error('Postgres pool error:');
+  console.error('  code:   ', err.code);
+  console.error('  message:', err.message);
 });
 
 (async () => {
   try {
     const r = await pool.query('SELECT NOW()');
-    console.log('Connected to Neon Postgres at', r.rows[0].now);
+    console.log('✓ Connected to Neon Postgres at', r.rows[0].now);
   } catch (err) {
-    console.error('DB connection failed:', err.message);
+    console.error('✗ DB CONNECTION FAILED');
+    console.error('  code:   ', err.code);
+    console.error('  message:', err.message);
+    console.error('  detail: ', err.detail);
+    console.error('  hint:   ', err.hint);
+    console.error('  severity:', err.severity);
+    console.error('  full error object:');
+    console.error(err);
   }
 })();
 
