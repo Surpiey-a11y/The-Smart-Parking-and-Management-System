@@ -1,434 +1,410 @@
-require('dotenv').config();
-const express = require('express');
-const { Pool } = require('pg');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const cors = require('cors');
-const path = require('path');
+const API_BASE = '';
+const TOKEN = localStorage.getItem('smartpark_token');
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'change-this-secret-in-production';
-const HARDWARE_API_KEY = process.env.HARDWARE_API_KEY || 'change-this-hardware-key';
+if (!TOKEN) {
+  window.location.href = 'login.html';
+}
 
-app.use(cors());
-app.use(express.json());
-app.use(express.static(path.join(__dirname)));
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
-
-pool.on('error', (err) => {
-  console.error('Postgres pool error:', err.code, err.message);
-});
-
-(async () => {
+const userRaw = localStorage.getItem('smartpark_user');
+if (userRaw) {
   try {
-    const r = await pool.query('SELECT NOW()');
-    console.log('Connected to Neon Postgres at', r.rows[0].now);
-  } catch (err) {
-    console.error('DB connection failed:', err.message);
+    const u = JSON.parse(userRaw);
+    const el = document.getElementById('user-display-name');
+    if (el) el.textContent = u.name || 'User';
+  } catch {}
+}
+
+let selectedSlotId = null;
+let allSlots = [];
+
+const container      = document.getElementById('vip-slots-container');
+const label          = document.getElementById('selected-slot-label');
+const confirmBtn     = document.getElementById('confirm-vip-btn');
+const myListEl       = document.getElementById('my-reservations-list');
+const mySectionEl    = document.getElementById('my-reservations-section');
+const gatePanel      = document.getElementById('vip-gate-panel');
+
+const dateInput      = document.getElementById('booking-date');
+const timeInput      = document.getElementById('booking-time');
+const durationSelect = document.getElementById('booking-duration');
+const summaryBar     = document.getElementById('booking-summary');
+const summaryText    = document.getElementById('booking-summary-text');
+
+function showToast(msg, success = true) {
+  const toast = document.getElementById('toast');
+  const toastText = document.getElementById('toast-text');
+  if (!toast || !toastText) return;
+  toastText.textContent = msg;
+  const icon = toast.querySelector('i');
+  if (icon) {
+    icon.className = success ? 'fas fa-check-circle' : 'fas fa-exclamation-circle';
+    icon.style.color = success ? '#22c55e' : '#f97316';
   }
-})();
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 2800);
+}
 
-function auth(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'No token provided' });
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.userId = decoded.userId;
-    next();
-  } catch {
-    res.status(401).json({ error: 'Invalid token' });
+function initDateTimeInputs() {
+  if (!dateInput || !timeInput) return;
+
+  const today = new Date().toISOString().split('T')[0];
+  dateInput.setAttribute('min', today);
+  if (!dateInput.value) dateInput.value = today;
+
+  if (!timeInput.value) {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() + 15);
+    now.setMinutes(Math.ceil(now.getMinutes() / 15) * 15, 0, 0);
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    timeInput.value = `${hh}:${mm}`;
   }
 }
 
-app.post('/api/auth/register', async (req, res) => {
-  try {
-    const { name, email, password } = req.body;
-    if (!name || !email || !password)
-      return res.status(400).json({ error: 'All fields are required' });
+function getBookingDateTime() {
+  if (!dateInput || !timeInput) return null;
+  const d = dateInput.value;
+  const t = timeInput.value;
+  if (!d || !t) return null;
+  const dt = new Date(`${d}T${t}:00`);
+  if (isNaN(dt.getTime())) return null;
+  return dt;
+}
 
-    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-    if (existing.rows.length > 0)
-      return res.status(400).json({ error: 'Email already registered' });
+function updateSummaryAndSlots() {
+  if (!summaryText || !summaryBar) return;
 
-    const hashed = await bcrypt.hash(password, 10);
-    const result = await pool.query(
-      'INSERT INTO users (name, email, password) VALUES ($1, $2, $3) RETURNING id, name, email',
-      [name, email, hashed]
-    );
-
-    const user = result.rows[0];
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, user });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+  const dt = getBookingDateTime();
+  if (!dt) {
+    summaryText.textContent = 'Choose a date and time to see available slots.';
+    summaryBar.classList.remove('warn');
+    confirmBtn.disabled = true;
+    return;
   }
-});
 
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (result.rows.length === 0)
-      return res.status(400).json({ error: 'Invalid credentials' });
-
-    const user = result.rows[0];
-    const ok = await bcrypt.compare(password, user.password);
-    if (!ok) return res.status(400).json({ error: 'Invalid credentials' });
-
-    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email } });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+  if (dt < new Date()) {
+    summaryBar.classList.add('warn');
+    summaryText.textContent = 'The selected time is in the past. Please choose a future time.';
+    confirmBtn.disabled = true;
+    return;
   }
-});
 
-app.get('/api/auth/me', auth, async (req, res) => {
-  const result = await pool.query(
-    'SELECT id, name, email FROM users WHERE id = $1',
-    [req.userId]
-  );
-  res.json(result.rows[0]);
-});
+  summaryBar.classList.remove('warn');
 
-const SLOTS = [
-  { id: 'V1', type: 'vip' },
-  { id: 'P1', type: 'public' },
-  { id: 'P2', type: 'public' }
-];
+  const dur = parseInt(durationSelect?.value || '120', 10);
+  const hrs = dur / 60;
+  const durLabel = hrs === 1 ? '1 hour' : `${hrs} hours`;
+  summaryText.textContent = `Booking for ${dateInput.value} at ${timeInput.value} — ${durLabel}.`;
 
-const SENSOR_TO_SLOT = { 1: 'P1', 2: 'P2', 3: 'V1' };
+  if (selectedSlotId) {
+    confirmBtn.disabled = false;
+  }
 
-app.get('/api/slots', async (req, res) => {
-  try {
-    const date = req.query.date || new Date().toISOString().split('T')[0];
-    const time = req.query.time || '00:00';
-    const durationMinutes = parseInt(req.query.duration || '120', 10);
+  loadSlots();
+}
 
-    const startTs = `${date} ${time}`;
-    const startMs = new Date(`${date}T${time}:00`).getTime();
-    if (isNaN(startMs)) {
-      return res.status(400).json({ error: 'Invalid date or time' });
+function renderSlots(slots, summary) {
+  container.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.style.marginBottom = '12px';
+  header.style.fontSize = '14px';
+  header.style.opacity = '0.85';
+  header.innerHTML = `<strong>${summary.vip.available}</strong> of <strong>${summary.vip.total}</strong> VIP spaces available today`;
+  container.appendChild(header);
+
+  const vipSlots = slots.filter(s => s.type === 'vip');
+
+  if (vipSlots.length === 0) {
+    container.innerHTML += '<p>No VIP slots configured.</p>';
+    return;
+  }
+
+  const grid = document.createElement('div');
+  grid.style.display = 'grid';
+  grid.style.gridTemplateColumns = 'repeat(auto-fill, minmax(120px, 1fr))';
+  grid.style.gap = '12px';
+
+  vipSlots.forEach(slot => {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.dataset.slotId = slot.id;
+    card.className = 'slot-card ' + slot.status;
+    card.style.padding = '16px';
+    card.style.borderRadius = '10px';
+    card.style.cursor = slot.status === 'available' ? 'pointer' : 'not-allowed';
+    card.style.border = '1px solid rgba(255,255,255,0.1)';
+    card.style.background = slot.status === 'available'
+      ? 'rgba(255,255,255,0.05)'
+      : 'rgba(120,120,120,0.15)';
+    card.style.color = 'inherit';
+    card.style.opacity = slot.status === 'available' ? '1' : '0.5';
+    card.innerHTML = `
+      <div style="font-size:20px;"><i class="fas fa-crown"></i></div>
+      <div style="font-weight:600;margin-top:6px;">${slot.id}</div>
+      <div style="font-size:12px;margin-top:4px;">${slot.status === 'available' ? 'Available' : 'Occupied'}</div>
+    `;
+
+    if (slot.status === 'available') {
+      card.addEventListener('click', () => selectSlot(slot.id));
     }
-    const endTs = new Date(startMs + durationMinutes * 60000)
-      .toISOString().slice(0, 19).replace('T', ' ');
 
-    const reservedResult = await pool.query(
-      `SELECT slot_id FROM reservations
-       WHERE status = 'active'
-         AND reservation_date IS NOT NULL
-         AND start_time IS NOT NULL
-         AND (
-           (reservation_date + start_time),
-           (reservation_date + start_time + (COALESCE(duration_minutes, duration * 60, 60) || ' minutes')::interval)
-         )
-         OVERLAPS
-         ($1::timestamp, $2::timestamp)`,
-      [startTs, endTs]
-    );
-    const reserved = reservedResult.rows.map(r => r.slot_id);
+    grid.appendChild(card);
+  });
 
-    const sensorResult = await pool.query('SELECT slot_id, occupied FROM slot_sensors');
-    const sensorMap = {};
-    sensorResult.rows.forEach(r => { sensorMap[r.slot_id] = r.occupied; });
+  container.appendChild(grid);
+}
 
-    const slots = SLOTS.map(s => {
-      const isReserved = reserved.includes(s.id);
-      const isPhysicallyOccupied = sensorMap[s.id] === true;
-      const occupied = isReserved || isPhysicallyOccupied;
+function selectSlot(id) {
+  selectedSlotId = id;
 
-      return {
-        ...s,
-        status: occupied ? 'occupied' : 'available',
-        reserved: isReserved,
-        physicallyOccupied: isPhysicallyOccupied
-      };
+  const dt = getBookingDateTime();
+  if (dt && dt >= new Date()) {
+    label.textContent = `Selected: ${id} — ${dateInput.value} at ${timeInput.value}`;
+    confirmBtn.disabled = false;
+  } else {
+    label.textContent = `Selected: ${id} (choose a valid date/time)`;
+    confirmBtn.disabled = true;
+  }
+
+  document.querySelectorAll('.slot-card').forEach(c => {
+    c.style.outline = c.dataset.slotId === id ? '2px solid #a855f7' : 'none';
+  });
+}
+
+async function loadSlots() {
+  try {
+    const params = new URLSearchParams();
+    if (dateInput?.value) params.set('date', dateInput.value);
+    if (timeInput?.value) params.set('time', timeInput.value);
+    if (durationSelect?.value) params.set('duration', durationSelect.value);
+
+    const qs = params.toString();
+    const url = qs ? `${API_BASE}/api/slots?${qs}` : `${API_BASE}/api/slots`;
+
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Failed to load slots');
+    const data = await res.json();
+    allSlots = data.slots;
+    renderSlots(data.slots, data.summary);
+  } catch (err) {
+    container.innerHTML = `<p style="color:#f97316;">Could not load slots: ${err.message}</p>`;
+  }
+}
+
+async function loadMyReservations() {
+  if (!myListEl) return;
+  try {
+    const res = await fetch(`${API_BASE}/api/reservations/my`, {
+      headers: { Authorization: `Bearer ${TOKEN}` }
+    });
+    if (!res.ok) return;
+    const list = await res.json();
+
+    const active = list.filter(r => r.status === 'active');
+
+    if (active.length === 0) {
+      mySectionEl.style.display = 'none';
+      gatePanel.style.display = 'none';
+      return;
+    }
+
+    mySectionEl.style.display = 'block';
+
+    const hasVip = active.some(r => r.slot_id === 'V1' && r.code);
+    gatePanel.style.display = hasVip ? 'block' : 'none';
+
+    myListEl.innerHTML = active.map(r => {
+      const isVip = r.slot_id === 'V1';
+      const badge = isVip
+        ? '<span style="background:#a855f7;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">VIP</span>'
+        : '<span style="background:#3b82f6;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">PUBLIC</span>';
+
+      const dateStr = r.reservation_date || r.date || '';
+      const timeStr = r.start_time || r.time || '';
+      const durStr = r.duration_minutes
+        ? `${r.duration_minutes} min`
+        : (r.duration ? `${r.duration} h` : '');
+
+      return `
+        <div style="padding:14px;border-radius:10px;background:rgba(255,255,255,0.05);
+                    margin-top:8px;border:1px solid rgba(255,255,255,0.08);">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+            <div style="flex:1;">
+              <div style="font-weight:600;font-size:15px;">
+                Slot ${r.slot_id} ${badge}
+              </div>
+              <div style="font-size:12px;opacity:0.7;margin-top:4px;">
+                📅 ${dateStr} · 🕐 ${timeStr}${durStr ? ' · ⏱ ' + durStr : ''}
+              </div>
+            </div>
+            ${isVip && r.code ? `
+              <div style="text-align:right;">
+                <div style="font-size:10px;opacity:0.6;">CODE</div>
+                <strong style="font-size:22px;letter-spacing:4px;color:#a855f7;">
+                  ${r.code}
+                </strong>
+              </div>
+            ` : ''}
+          </div>
+          <button data-cancel-id="${r.id}"
+            style="margin-top:12px;width:100%;padding:9px;border-radius:6px;
+                   border:1px solid rgba(249,115,22,0.4);cursor:pointer;
+                   background:rgba(249,115,22,0.1);color:#f97316;
+                   font-size:13px;font-weight:600;">
+            <i class="fas fa-times"></i> Cancel this reservation
+          </button>
+        </div>
+      `;
+    }).join('');
+
+    myListEl.querySelectorAll('[data-cancel-id]').forEach(btn => {
+      btn.addEventListener('click', () => cancelReservation(btn.dataset.cancelId));
     });
 
-    const summary = {
-      vip: {
-        total: slots.filter(s => s.type === 'vip').length,
-        available: slots.filter(s => s.type === 'vip' && s.status === 'available').length
+  } catch (err) {
+    console.warn('loadMyReservations failed:', err.message);
+  }
+}
+
+async function cancelReservation(id) {
+  if (!confirm('Cancel this reservation? The slot will become available again.')) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/reservations/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${TOKEN}` }
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Cancel failed');
+
+    showToast('Reservation cancelled ✅');
+    await loadMyReservations();
+    await loadSlots();
+  } catch (err) {
+    showToast(err.message, false);
+  }
+}
+
+async function submitVipCode() {
+  const input = document.getElementById('vip-code-input');
+  const btn = document.getElementById('vip-code-submit');
+  const msg = document.getElementById('vip-code-msg');
+
+  const code = (input.value || '').trim();
+  if (code.length !== 4) {
+    msg.style.color = '#f97316';
+    msg.textContent = 'Please enter the 4-digit code.';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Opening…';
+  msg.textContent = '';
+
+  try {
+    const res = await fetch(`${API_BASE}/api/vip/verify-code`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${TOKEN}`
       },
-      public: {
-        total: slots.filter(s => s.type === 'public').length,
-        available: slots.filter(s => s.type === 'public' && s.status === 'available').length
-      }
-    };
-
-    res.json({ slots, summary });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/hardware/slot-update', async (req, res) => {
-  try {
-    const key = req.headers['x-api-key'];
-    if (key !== HARDWARE_API_KEY) {
-      return res.status(401).json({ error: 'Invalid API key' });
-    }
-
-    const { sensorId, occupied } = req.body;
-    if (sensorId === undefined || typeof occupied !== 'boolean') {
-      return res.status(400).json({ error: 'sensorId and occupied required' });
-    }
-
-    const slotId = SENSOR_TO_SLOT[sensorId];
-    if (!slotId) {
-      return res.status(400).json({ error: 'Unknown sensorId' });
-    }
-
-    await pool.query(
-      `INSERT INTO slot_sensors (slot_id, occupied, updated_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (slot_id) DO UPDATE
-         SET occupied = EXCLUDED.occupied, updated_at = NOW()`,
-      [slotId, occupied]
-    );
-
-    console.log(`[HW] Sensor ${sensorId} -> ${slotId} = ${occupied ? 'OCCUPIED' : 'FREE'}`);
-    res.json({ ok: true, slotId, occupied });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/hardware/batch-update', async (req, res) => {
-  try {
-    const key = req.headers['x-api-key'];
-    if (key !== HARDWARE_API_KEY) {
-      return res.status(401).json({ error: 'Invalid API key' });
-    }
-
-    const { sensors } = req.body;
-    if (!Array.isArray(sensors)) {
-      return res.status(400).json({ error: 'sensors array required' });
-    }
-
-    for (const s of sensors) {
-      const slotId = SENSOR_TO_SLOT[s.sensorId];
-      if (!slotId) continue;
-
-      await pool.query(
-        `INSERT INTO slot_sensors (slot_id, occupied, updated_at)
-         VALUES ($1, $2, NOW())
-         ON CONFLICT (slot_id) DO UPDATE
-           SET occupied = EXCLUDED.occupied, updated_at = NOW()`,
-        [slotId, s.occupied]
-      );
-    }
-
-    console.log('[HW] Batch update:',
-      sensors.map(s => `${s.sensorId}=${s.occupied}`).join(' '));
-    res.json({ ok: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/hardware/status', async (req, res) => {
-  try {
-    const key = req.headers['x-api-key'];
-    if (key !== HARDWARE_API_KEY) {
-      return res.status(401).json({ error: 'Invalid API key' });
-    }
-
-    const today = new Date().toISOString().split('T')[0];
-
-    const reservedResult = await pool.query(
-      'SELECT slot_id FROM reservations WHERE date = $1 AND status = $2',
-      [today, 'active']
-    );
-    const reserved = reservedResult.rows.map(r => r.slot_id);
-
-    res.json({
-      reservedV1: reserved.includes('V1') ? 1 : 0,
-      reservedP1: reserved.includes('P1') ? 1 : 0,
-      reservedP2: reserved.includes('P2') ? 1 : 0
+      body: JSON.stringify({ code })
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Invalid code');
 
-app.post('/api/reservations', auth, async (req, res) => {
+    msg.style.color = '#22c55e';
+    msg.textContent = '✅ Gate opening — please proceed.';
+    input.value = '';
+    showToast('VIP gate opening…');
+  } catch (err) {
+    msg.style.color = '#f97316';
+    msg.textContent = '❌ ' + err.message;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Open Gate';
+  }
+}
+
+confirmBtn?.addEventListener('click', async () => {
+  if (!selectedSlotId) return;
+
+  const dt = getBookingDateTime();
+  if (!dt || dt < new Date()) {
+    showToast('Please choose a valid future date and time.', false);
+    return;
+  }
+
+  confirmBtn.disabled = true;
+  const original = confirmBtn.innerHTML;
+  confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Booking…';
+
+  const durationMinutes = parseInt(durationSelect?.value || '120', 10);
+
   try {
-    const { slotId, date, time, duration } = req.body;
-    if (!slotId || !date || !time)
-      return res.status(400).json({ error: 'Missing booking details' });
+    const res = await fetch(`${API_BASE}/api/reservations`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${TOKEN}`
+      },
+      body: JSON.stringify({
+        slotId: selectedSlotId,
+        slot_id: selectedSlotId,
+        date: dateInput.value,
+        reservation_date: dateInput.value,
+        time: timeInput.value,
+        start_time: timeInput.value,
+        duration: Math.max(1, Math.round(durationMinutes / 60)),
+        duration_minutes: durationMinutes
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Booking failed');
 
-    const reservationDate = req.body.reservation_date || date;
-    const startTime = req.body.start_time || time;
-    const durationHours = duration || 1;
-    const durationMinutes = req.body.duration_minutes || durationHours * 60;
-
-    const startTs = `${reservationDate} ${startTime}`;
-    const startMs = new Date(`${reservationDate}T${startTime}:00`).getTime();
-    if (isNaN(startMs)) {
-      return res.status(400).json({ error: 'Invalid date or time' });
-    }
-    const endTs = new Date(startMs + durationMinutes * 60000)
-      .toISOString().slice(0, 19).replace('T', ' ');
-
-    const conflict = await pool.query(
-      `SELECT id FROM reservations
-       WHERE slot_id = $1
-         AND status = 'active'
-         AND (
-           (reservation_date + start_time),
-           (reservation_date + start_time + (COALESCE(duration_minutes, duration * 60, 60) || ' minutes')::interval)
-         )
-         OVERLAPS
-         ($2::timestamp, $3::timestamp)`,
-      [slotId, startTs, endTs]
-    );
-    if (conflict.rows.length > 0)
-      return res.status(400).json({ error: 'This time slot is already booked for this bay' });
-
-    const sensor = await pool.query(
-      'SELECT occupied FROM slot_sensors WHERE slot_id = $1',
-      [slotId]
-    );
-    if (sensor.rows.length > 0 && sensor.rows[0].occupied) {
-      return res.status(400).json({ error: 'That slot is currently occupied' });
+    if (data.code) {
+      showToast(`VIP booked! Your code: ${data.code}`);
+      setTimeout(() => {
+        alert(
+          `Your VIP booking is confirmed.\n\n` +
+          `Bay: ${selectedSlotId}\n` +
+          `Date: ${dateInput.value}\n` +
+          `Time: ${timeInput.value}\n` +
+          `Duration: ${durationMinutes} minutes\n\n` +
+          `Your access code is: ${data.code}\n\n` +
+          `Write it down. You'll need it to open the VIP gate.`
+        );
+      }, 300);
+    } else {
+      showToast(`Slot ${selectedSlotId} booked!`);
     }
 
-    let code = null;
-    if (slotId === 'V1') {
-      code = String(Math.floor(1000 + Math.random() * 9000));
-      console.log(`[VIP] Booking V1 - code generated: ${code}`);
-    }
-
-    const result = await pool.query(
-      `INSERT INTO reservations
-         (user_id, slot_id, date, time, duration,
-          reservation_date, start_time, duration_minutes, code)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [req.userId, slotId, reservationDate, startTime, durationHours,
-       reservationDate, startTime, durationMinutes, code]
-    );
-
-    res.json(result.rows[0]);
+    selectedSlotId = null;
+    label.textContent = 'No slot selected yet.';
+    await loadSlots();
+    await loadMyReservations();
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    showToast(err.message, false);
+  } finally {
+    confirmBtn.innerHTML = original;
+    confirmBtn.disabled = !selectedSlotId;
   }
 });
 
-app.get('/api/reservations/my', auth, async (req, res) => {
-  const result = await pool.query(
-    'SELECT * FROM reservations WHERE user_id = $1 AND status = $2 ORDER BY created_at DESC',
-    [req.userId, 'active']
-  );
-  res.json(result.rows);
+document.getElementById('vip-code-submit')?.addEventListener('click', submitVipCode);
+document.getElementById('vip-code-input')?.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') submitVipCode();
 });
 
-app.delete('/api/reservations/:id', auth, async (req, res) => {
-  const result = await pool.query(
-    'UPDATE reservations SET status = $1 WHERE id = $2 AND user_id = $3 RETURNING *',
-    ['cancelled', req.params.id, req.userId]
-  );
-  if (result.rows.length === 0)
-    return res.status(404).json({ error: 'Reservation not found' });
-  res.json({ success: true });
-});
+dateInput?.addEventListener('change', updateSummaryAndSlots);
+timeInput?.addEventListener('change', updateSummaryAndSlots);
+durationSelect?.addEventListener('change', updateSummaryAndSlots);
 
-// =========================================================================
-// FIXED: VIP Verify Code Endpoint (Time Validation)
-// =========================================================================
-app.post('/api/vip/verify-code', auth, async (req, res) => {
-  try {
-    const { code } = req.body;
+initDateTimeInputs();
+updateSummaryAndSlots();
 
-    if (!code || String(code).length !== 4) {
-      return res.status(400).json({ error: '4-digit code required' });
-    }
-
-    // FIX: Let PostgreSQL calculate the exact start and end timestamps
-    const result = await pool.query(
-      `SELECT *,
-              (reservation_date + start_time) AS exact_start,
-              (reservation_date + start_time + (COALESCE(duration_minutes, duration * 60, 60) || ' minutes')::interval) AS exact_end
-       FROM reservations
-       WHERE code = $1
-         AND slot_id = 'V1'
-         AND status = 'active'
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [String(code)]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(400).json({ error: 'Invalid or expired VIP code' });
-    }
-
-    const r = result.rows[0];
-    
-    // FIX: Use the clean timestamps returned from the database
-    const startDateTime = new Date(r.exact_start);
-    const endDateTime = new Date(r.exact_end);
-    const now = new Date();
-    const graceMs = 15 * 60 * 1000; // 15 minutes grace period
-
-    // These checks will now actually block the user if they are outside the time window
-    if (now < new Date(startDateTime.getTime() - graceMs)) {
-      return res.status(400).json({
-        error: `Your booking starts at ${r.start_time} on ${r.reservation_date}. Please come back then.`
-      });
-    }
-    if (now > new Date(endDateTime.getTime() + graceMs)) {
-      return res.status(400).json({ error: 'Your booking time has expired.' });
-    }
-
-    await pool.query(
-      `INSERT INTO vip_command (id, open_vip) VALUES (1, true)
-       ON CONFLICT (id) DO UPDATE SET open_vip = true`
-    );
-
-    console.log(`[VIP] Code ${code} verified - gate command sent`);
-    res.json({ ok: true, message: 'VIP gate opening...' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
-  }
-});
-// =========================================================================
-
-app.get('/api/vip/command', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT open_vip FROM vip_command WHERE id = 1');
-    res.json({ openVIP: result.rows[0]?.open_vip || false });
-  } catch (err) {
-    res.status(500).json({ openVIP: false, error: err.message });
-  }
-});
-
-app.post('/api/vip/command/ack', async (req, res) => {
-  try {
-    await pool.query('UPDATE vip_command SET open_vip = false WHERE id = 1');
-    console.log('[VIP] Gate opened - command reset');
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+loadSlots();
+loadMyReservations();
+setInterval(loadSlots, 5000);
+setInterval(loadMyReservations, 10000);
