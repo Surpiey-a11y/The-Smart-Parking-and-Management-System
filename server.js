@@ -345,6 +345,9 @@ app.delete('/api/reservations/:id', auth, async (req, res) => {
   res.json({ success: true });
 });
 
+// =========================================================================
+// FIXED: VIP Verify Code Endpoint (Time Validation)
+// =========================================================================
 app.post('/api/vip/verify-code', auth, async (req, res) => {
   try {
     const { code } = req.body;
@@ -353,8 +356,12 @@ app.post('/api/vip/verify-code', auth, async (req, res) => {
       return res.status(400).json({ error: '4-digit code required' });
     }
 
+    // FIX: Let PostgreSQL calculate the exact start and end timestamps
     const result = await pool.query(
-      `SELECT * FROM reservations
+      `SELECT *,
+              (reservation_date + start_time) AS exact_start,
+              (reservation_date + start_time + (COALESCE(duration_minutes, duration * 60, 60) || ' minutes')::interval) AS exact_end
+       FROM reservations
        WHERE code = $1
          AND slot_id = 'V1'
          AND status = 'active'
@@ -368,12 +375,14 @@ app.post('/api/vip/verify-code', auth, async (req, res) => {
     }
 
     const r = result.rows[0];
-    const startDateTime = new Date(`${r.reservation_date}T${r.start_time}`);
-    const durationMin = r.duration_minutes || (r.duration || 2) * 60;
-    const endDateTime = new Date(startDateTime.getTime() + durationMin * 60 * 1000);
+    
+    // FIX: Use the clean timestamps returned from the database
+    const startDateTime = new Date(r.exact_start);
+    const endDateTime = new Date(r.exact_end);
     const now = new Date();
-    const graceMs = 15 * 60 * 1000;
+    const graceMs = 15 * 60 * 1000; // 15 minutes grace period
 
+    // These checks will now actually block the user if they are outside the time window
     if (now < new Date(startDateTime.getTime() - graceMs)) {
       return res.status(400).json({
         error: `Your booking starts at ${r.start_time} on ${r.reservation_date}. Please come back then.`
@@ -395,6 +404,7 @@ app.post('/api/vip/verify-code', auth, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// =========================================================================
 
 app.get('/api/vip/command', async (req, res) => {
   try {
