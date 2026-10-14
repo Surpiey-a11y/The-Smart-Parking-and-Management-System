@@ -30,10 +30,6 @@ const durationSelect = document.getElementById('booking-duration');
 const summaryBar     = document.getElementById('booking-summary');
 const summaryText    = document.getElementById('booking-summary-text');
 
-// =========================================================================
-// HELPERS
-// =========================================================================
-
 function pad2(n) { return String(n).padStart(2, '0'); }
 
 function todayLocalStr() {
@@ -55,9 +51,13 @@ function showToast(msg, success = true) {
   setTimeout(() => toast.classList.remove('show'), 2800);
 }
 
-// =========================================================================
-// FIX 1: Constrain time input so past times on today are not selectable
-// =========================================================================
+function formatLocalDate(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function formatLocalTime(d) {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
 
 function updateTimeMinMax() {
   if (!dateInput || !timeInput) return;
@@ -65,7 +65,6 @@ function updateTimeMinMax() {
   const today = todayLocalStr();
 
   if (dateInput.value === today) {
-    // Add a 5-minute buffer so a "just now" booking can't fail in transit
     const now = new Date();
     now.setMinutes(now.getMinutes() + 5);
     timeInput.min = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
@@ -93,10 +92,6 @@ function initDateTimeInputs() {
   updateTimeMinMax();
 }
 
-// =========================================================================
-// DATE / TIME / DURATION
-// =========================================================================
-
 function getBookingDateTime() {
   if (!dateInput || !timeInput) return null;
   const d = dateInput.value;
@@ -106,10 +101,6 @@ function getBookingDateTime() {
   if (isNaN(dt.getTime())) return null;
   return dt;
 }
-
-// =========================================================================
-// FIX 4: Clear selection when time window changes
-// =========================================================================
 
 function clearSelection(message) {
   selectedSlotId = null;
@@ -145,17 +136,12 @@ function updateSummaryAndSlots() {
   const durLabel = hrs === 1 ? '1 hour' : `${hrs} hours`;
   summaryText.textContent = `Booking for ${dateInput.value} at ${timeInput.value} — ${durLabel}.`;
 
-  // FIX 4: time window changed — the previously selected slot may no longer be valid
   if (selectedSlotId) {
     clearSelection('Time window changed — please re-select a slot.');
   }
 
   loadSlots();
 }
-
-// =========================================================================
-// RENDER SLOTS
-// =========================================================================
 
 function renderSlots(slots, summary) {
   if (!container) return;
@@ -204,7 +190,6 @@ function renderSlots(slots, summary) {
       card.addEventListener('click', () => selectSlot(slot.id));
     }
 
-    // Preserve selection outline after re-render
     if (selectedSlotId === slot.id && slot.status === 'available') {
       card.style.outline = '2px solid #a855f7';
     }
@@ -232,10 +217,6 @@ function selectSlot(id) {
   });
 }
 
-// =========================================================================
-// FIX 4 (cont.): Re-validate selection after loading slots
-// =========================================================================
-
 async function loadSlots() {
   try {
     const params = new URLSearchParams();
@@ -253,7 +234,6 @@ async function loadSlots() {
 
     renderSlots(data.slots, data.summary);
 
-    // Re-validate the current selection against the freshly loaded data
     if (selectedSlotId) {
       const stillAvailable = data.slots.some(
         s => s.id === selectedSlotId && s.status === 'available'
@@ -268,10 +248,6 @@ async function loadSlots() {
     }
   }
 }
-
-// =========================================================================
-// MY RESERVATIONS
-// =========================================================================
 
 async function loadMyReservations() {
   if (!myListEl) return;
@@ -301,8 +277,23 @@ async function loadMyReservations() {
         ? '<span style="background:#a855f7;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">VIP</span>'
         : '<span style="background:#3b82f6;color:white;padding:2px 8px;border-radius:4px;font-size:10px;">PUBLIC</span>';
 
-      const dateStr = r.reservation_date || r.date || '';
-      const timeStr = r.start_time || r.time || '';
+      const rawDate = r.reservation_date || r.date || '';
+      const rawTime = r.start_time || r.time || '';
+
+      let dateStr = rawDate;
+      let timeStr = rawTime;
+
+      if (typeof rawDate === 'string' && rawDate.includes('T')) {
+        dateStr = rawDate.split('T')[0];
+      }
+      if (typeof rawTime === 'string' && rawTime.includes('T')) {
+        const tPart = rawTime.split('T')[1];
+        timeStr = tPart ? tPart.slice(0, 5) : rawTime;
+      }
+      if (typeof timeStr === 'string' && timeStr.length > 5 && timeStr.includes(':')) {
+        timeStr = timeStr.slice(0, 5);
+      }
+
       const durStr = r.duration_minutes
         ? `${r.duration_minutes} min`
         : (r.duration ? `${r.duration} h` : '');
@@ -367,10 +358,6 @@ async function cancelReservation(id) {
   }
 }
 
-// =========================================================================
-// VIP CODE SUBMISSION
-// =========================================================================
-
 async function submitVipCode() {
   const input = document.getElementById('vip-code-input');
   const btn = document.getElementById('vip-code-submit');
@@ -412,10 +399,6 @@ async function submitVipCode() {
   }
 }
 
-// =========================================================================
-// FIX 2: Simplified booking POST body
-// =========================================================================
-
 confirmBtn?.addEventListener('click', async () => {
   if (!selectedSlotId) return;
 
@@ -431,6 +414,9 @@ confirmBtn?.addEventListener('click', async () => {
 
   const durationMinutes = parseInt(durationSelect?.value || '120', 10);
 
+  const reservationDate = formatLocalDate(dt);
+  const startTime       = formatLocalTime(dt);
+
   try {
     const res = await fetch(`${API_BASE}/api/reservations`, {
       method: 'POST',
@@ -440,8 +426,10 @@ confirmBtn?.addEventListener('click', async () => {
       },
       body: JSON.stringify({
         slotId: selectedSlotId,
-        date: dateInput.value,
-        time: timeInput.value,
+        reservation_date: reservationDate,
+        start_time: startTime,
+        date: reservationDate,
+        time: startTime.slice(0, 5),
         duration_minutes: durationMinutes
       })
     });
@@ -454,8 +442,8 @@ confirmBtn?.addEventListener('click', async () => {
         alert(
           `Your VIP booking is confirmed.\n\n` +
           `Bay: ${selectedSlotId}\n` +
-          `Date: ${dateInput.value}\n` +
-          `Time: ${timeInput.value}\n` +
+          `Date: ${reservationDate}\n` +
+          `Time: ${startTime.slice(0, 5)}\n` +
           `Duration: ${durationMinutes} minutes\n\n` +
           `Your access code is: ${data.code}\n\n` +
           `Write it down. You'll need it to open the VIP gate.`
@@ -476,10 +464,6 @@ confirmBtn?.addEventListener('click', async () => {
   }
 });
 
-// =========================================================================
-// EVENT WIRING
-// =========================================================================
-
 document.getElementById('vip-code-submit')?.addEventListener('click', submitVipCode);
 document.getElementById('vip-code-input')?.addEventListener('keypress', (e) => {
   if (e.key === 'Enter') submitVipCode();
@@ -492,22 +476,14 @@ dateInput?.addEventListener('change', () => {
 timeInput?.addEventListener('change', updateSummaryAndSlots);
 durationSelect?.addEventListener('change', updateSummaryAndSlots);
 
-// =========================================================================
-// INITIAL LOAD
-// =========================================================================
-
 initDateTimeInputs();
 updateSummaryAndSlots();
 
 loadSlots();
 loadMyReservations();
 
-// =========================================================================
-// FIX 3: Gentler polling + refresh on tab focus
-// =========================================================================
-
-setInterval(loadSlots, 15000);          // was 5000 — now 15s
-setInterval(loadMyReservations, 30000); // was 10000 — now 30s
+setInterval(loadSlots, 15000);
+setInterval(loadMyReservations, 30000);
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
